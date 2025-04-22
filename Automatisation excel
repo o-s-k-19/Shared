@@ -5,25 +5,43 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 
 import java.io.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class ExcelComparator {
-    // Configuration
+    // Configuration générale
     private static final String BASE_FILE      = "C:\\chemin\\vers\\fichier_base.xlsx";
     private static final String TARGET_FOLDER  = "C:\\chemin\\vers\\dossier_cibles\\";
-    private static final String SHEET_NAME     = "NomDeLaFeuille";      // <-- Nom exact de la feuille cible
+    private static final String SHEET_NAME     = "NomDeLaFeuille"; // feuille cible du fichier de base
     private static final String KEY_COLUMN     = "ID";
     private static final List<String> CHECK_COLUMNS = Arrays.asList("ColA", "ColB");
     private static final String RESULT_COLUMN  = "Statut";
-    private static final int HEADER_ROW        = 5;  // Numéro de la ligne de vos entêtes (1-based)
+    private static final int BASE_HEADER_ROW  = 5;  // ligne d'entête (1-based) pour le fichier de base
+
+    // Configuration spécifique à chaque fichier cible
+    private static class TargetConfig {
+        String path;
+        String sheetName;
+        int headerRow;
+        TargetConfig(String path, String sheetName, int headerRow) {
+            this.path = path;
+            this.sheetName = sheetName;
+            this.headerRow = headerRow;
+        }
+    }
+
+    // Déclarez ici la configuration de chaque fichier cible
+    private static final List<TargetConfig> TARGET_CONFIGS = Arrays.asList(
+        new TargetConfig("C:\\chemin\\vers\\dossier_cibles\\fichier1.xlsx", "Feuille1", 4),
+        new TargetConfig("C:\\chemin\\vers\\dossier_cibles\\fichier2.xlsx", "FeuilleA", 6)
+        // ajoutez autant de fichiers que nécessaire
+    );
 
     public static void main(String[] args) {
-        try {
-            // Charger le classeur de base
-            Workbook baseWorkbook = WorkbookFactory.create(new File(BASE_FILE));
+        try (Workbook baseWorkbook = WorkbookFactory.create(new File(BASE_FILE))) {
             DataFormatter formatter = new DataFormatter();
             FormulaEvaluator evaluator = baseWorkbook.getCreationHelper().createFormulaEvaluator();
 
-            // Préparer styles pour OK (vert) et KO (rouge)
+            // Styles OK / KO
             CellStyle okStyle = baseWorkbook.createCellStyle();
             okStyle.setFillForegroundColor(IndexedColors.GREEN.getIndex());
             okStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
@@ -31,124 +49,112 @@ public class ExcelComparator {
             koStyle.setFillForegroundColor(IndexedColors.RED.getIndex());
             koStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
 
-            // Récupérer la feuille cible
+            // Chargement de la feuille unique du fichier de base
             Sheet baseSheet = baseWorkbook.getSheet(SHEET_NAME);
             if (baseSheet == null) {
-                System.err.println("Feuille '" + SHEET_NAME + "' introuvable. Vérifiez le nom.");
-                baseWorkbook.close();
+                System.err.println("Feuille '" + SHEET_NAME + "' introuvable dans le fichier de base.");
                 return;
             }
 
-            // Construire le mapping entêtes → index de colonnes
-            Map<String, Integer> headerMap = new HashMap<>();
-            Row header = baseSheet.getRow(HEADER_ROW - 1);
-            if (header == null) {
-                System.err.println("Aucune en-tête trouvée à la ligne " + HEADER_ROW + ".");
-                baseWorkbook.close();
+            // Map entêtes → index (0-based)
+            Map<String, Integer> baseHeaderMap = new HashMap<>();
+            Row baseHeader = baseSheet.getRow(BASE_HEADER_ROW - 1);
+            if (baseHeader == null) {
+                System.err.println("Aucune en-tête trouvée à la ligne " + BASE_HEADER_ROW);
                 return;
             }
-            for (Cell cell : header) {
-                String cellValue = formatter.formatCellValue(cell, evaluator);
-                headerMap.put(cellValue, cell.getColumnIndex());
+            for (Cell cell : baseHeader) {
+                String val = formatter.formatCellValue(cell, evaluator);
+                baseHeaderMap.put(val, cell.getColumnIndex());
             }
 
-            // Vérifier la colonne clé
-            if (!headerMap.containsKey(KEY_COLUMN)) {
-                System.err.println("Clé '" + KEY_COLUMN + "' introuvable dans la feuille " + SHEET_NAME);
-                baseWorkbook.close();
+            // Vérifications de base
+            if (!baseHeaderMap.containsKey(KEY_COLUMN)) {
+                System.err.println("Colonne clé '" + KEY_COLUMN + "' introuvable.");
                 return;
             }
-
-            // Ajouter la colonne résultat si absente
-            if (!headerMap.containsKey(RESULT_COLUMN)) {
-                int newColIdx = header.getLastCellNum();
-                header.createCell(newColIdx).setCellValue(RESULT_COLUMN);
-                headerMap.put(RESULT_COLUMN, newColIdx);
+            if (!baseHeaderMap.containsKey(RESULT_COLUMN)) {
+                int newIdx = baseHeader.getLastCellNum();
+                baseHeader.createCell(newIdx).setCellValue(RESULT_COLUMN);
+                baseHeaderMap.put(RESULT_COLUMN, newIdx);
             }
 
-            int keyColIdx    = headerMap.get(KEY_COLUMN);
-            int resultColIdx = headerMap.get(RESULT_COLUMN);
+            int keyColIdx    = baseHeaderMap.get(KEY_COLUMN);
+            int resultColIdx = baseHeaderMap.get(RESULT_COLUMN);
             int lastRow      = baseSheet.getLastRowNum();
 
-            // Lister les fichiers cibles
-            File folder = new File(TARGET_FOLDER);
-            File[] excelFiles = folder.listFiles(f -> {
-                String name = f.getName().toLowerCase();
-                return (name.endsWith(".xls") || name.endsWith(".xlsx"))
-                       && !f.getAbsolutePath().equalsIgnoreCase(new File(BASE_FILE).getAbsolutePath());
-            });
-
-            // Parcourir chaque ligne de données
-            for (int ri = HEADER_ROW; ri <= lastRow; ri++) {
+            // Parcours des lignes de données
+            for (int ri = BASE_HEADER_ROW; ri <= lastRow; ri++) {
                 Row row = baseSheet.getRow(ri);
                 if (row == null) continue;
                 String keyVal = formatter.formatCellValue(row.getCell(keyColIdx), evaluator);
 
-                boolean foundAny = false;
-                boolean allMatch = true;
+                // Pour chaque colonne à vérifier, on liste les fichiers où la valeur est présente
+                Map<String, List<String>> foundInFiles = new LinkedHashMap<>();
+                for (String col : CHECK_COLUMNS) {
+                    foundInFiles.put(col, new ArrayList<>());
+                }
 
-                // Vérification dans chaque fichier cible
-                for (File targetFile : excelFiles != null ? excelFiles : new File[0]) {
-                    try (Workbook targetWb = WorkbookFactory.create(targetFile)) {
-                        Sheet targetSheet = targetWb.getSheet(SHEET_NAME);
-                        if (targetSheet == null) continue;
+                // Boucle sur chaque cible
+                for (TargetConfig cfg : TARGET_CONFIGS) {
+                    try (Workbook targetWb = WorkbookFactory.create(new File(cfg.path))) {
+                        Sheet tgtSheet = targetWb.getSheet(cfg.sheetName);
+                        if (tgtSheet == null) continue;
 
-                        // Mapping en-têtes pour la feuille cible
-                        Row tgtHeader = targetSheet.getRow(HEADER_ROW - 1);
+                        // Map en-têtes cible
                         Map<String, Integer> tgtHeaderMap = new HashMap<>();
+                        Row tgtHeader = tgtSheet.getRow(cfg.headerRow - 1);
                         for (Cell c : tgtHeader) {
-                            String val = formatter.formatCellValue(c, evaluator);
-                            tgtHeaderMap.put(val, c.getColumnIndex());
+                            String v = formatter.formatCellValue(c, evaluator);
+                            tgtHeaderMap.put(v, c.getColumnIndex());
                         }
-                        if (!tgtHeaderMap.containsKey(KEY_COLUMN)) continue;
 
-                        int tgtKeyColIdx = tgtHeaderMap.get(KEY_COLUMN);
-                        // Recherche de la clé
-                        for (Row tgtRow : targetSheet) {
-                            Cell kc = tgtRow.getCell(tgtKeyColIdx);
-                            if (kc != null && formatter.formatCellValue(kc, evaluator).equals(keyVal)) {
-                                foundAny = true;
-                                // Comparaison des colonnes
-                                for (String col : CHECK_COLUMNS) {
-                                    if (!headerMap.containsKey(col) || !tgtHeaderMap.containsKey(col)) {
-                                        allMatch = false;
-                                        break;
-                                    }
-                                    String baseVal = formatter.formatCellValue(row.getCell(headerMap.get(col)), evaluator);
-                                    String tgtValStr = formatter.formatCellValue(
-                                        tgtRow.getCell(tgtHeaderMap.get(col)), evaluator);
-                                    if (!baseVal.equals(tgtValStr)) {
-                                        allMatch = false;
-                                        break;
-                                    }
+                        // Vérifier chaque colonne
+                        for (String col : CHECK_COLUMNS) {
+                            // si colonne absente → on ne teste pas
+                            if (!baseHeaderMap.containsKey(col) || !tgtHeaderMap.containsKey(col)) continue;
+                            int tgtColIdx = tgtHeaderMap.get(col);
+                            String baseVal = formatter.formatCellValue(row.getCell(baseHeaderMap.get(col)), evaluator);
+
+                            // recherche dans toute la colonne
+                            for (int r2 = cfg.headerRow; r2 <= tgtSheet.getLastRowNum(); r2++) {
+                                Row rrow = tgtSheet.getRow(r2);
+                                if (rrow == null) continue;
+                                Cell tc = rrow.getCell(tgtColIdx);
+                                if (tc != null && baseVal.equals(formatter.formatCellValue(tc, evaluator))) {
+                                    foundInFiles.get(col).add(new File(cfg.path).getName());
+                                    break;
                                 }
-                                break;
                             }
                         }
                     } catch (Exception e) {
-                        System.err.println("Erreur lecture " + targetFile.getName() + ": " + e.getMessage());
+                        System.err.println("Erreur sur " + cfg.path + ": " + e.getMessage());
                     }
-                    if (!allMatch) break;
                 }
 
-                if (!foundAny) allMatch = false;
+                // Préparation du texte résultat
+                String resultText = foundInFiles.entrySet().stream()
+                    .map(e -> e.getKey() + ": " + (e.getValue().isEmpty() ? "(absent)" : String.join(",", e.getValue())))
+                    .collect(Collectors.joining(" | "));
 
-                // Écriture du résultat et application du style
+                // Écriture et style
                 Cell resCell = row.getCell(resultColIdx);
                 if (resCell == null) resCell = row.createCell(resultColIdx);
-                resCell.setCellValue(allMatch ? "OK" : "KO");
-                resCell.setCellStyle(allMatch ? okStyle : koStyle);
+                resCell.setCellValue(resultText);
+                // on colore en vert si toutes les colonnes ont été trouvées au moins une fois, sinon en rouge
+                boolean allFound = foundInFiles.values().stream().allMatch(list -> !list.isEmpty());
+                resCell.setCellStyle(allFound ? okStyle : koStyle);
             }
 
-            // Sauvegarde dans un nouveau fichier
-            String outPath = BASE_FILE.replaceAll("\\.xlsx?$", "") + "_résultats.xlsx";
-            try (FileOutputStream out = new FileOutputStream(outPath)) {
-                baseWorkbook.write(out);
+            // Sauvegarde
+            String out = BASE_FILE.replaceAll("\\.xlsx?$/, "") + "_résultats.xlsx";
+            try (FileOutputStream fos = new FileOutputStream(out)) {
+                baseWorkbook.write(fos);
             }
-            baseWorkbook.close();
-            System.out.println("Terminé! Fichier généré: " + outPath);
-        } catch (Exception e) {
-            e.printStackTrace();
+            System.out.println("Fichier généré : " + out);
+
+        } catch (Exception ex) {
+            ex.printStackTrace();
         }
     }
 }
