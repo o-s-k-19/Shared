@@ -1,0 +1,103 @@
+Option Explicit
+
+Sub VérifierEtColorer()
+    Dim baseWB     As Workbook
+    Dim baseWS     As Worksheet
+    Dim fso        As Object, fld As Object, file As Object
+    Dim cibleWB    As Workbook
+    Dim keyCol     As String, resultCol As String
+    Dim checkCols  As Variant
+    Dim folderPath As String
+    Dim headerMap  As Scripting.Dictionary
+    Dim iRow       As Long, iCol As Long
+    Dim keyVal     As Variant
+    Dim foundAny   As Boolean, allMatch As Boolean
+    Dim tgtVal     As Variant
+    Dim cellRes    As Range
+    
+    ' ————————————————————————————————
+    '  À ADAPTER
+    folderPath = "C:\chemin\vers\dossier_cibles\"  ' --> dossier contenant les fichiers à tester
+    keyCol     = "ID"                              ' --> nom de la colonne clé
+    checkCols  = Array("ColA", "ColB")             ' --> liste des colonnes à comparer
+    resultCol  = "Statut"                          ' --> nom de la colonne résultat
+    ' ————————————————————————————————
+    
+    Set baseWB = ThisWorkbook
+    Set fso    = CreateObject("Scripting.FileSystemObject")
+    Set fld    = fso.GetFolder(folderPath)
+    
+    ' Parcours de chaque feuille du classeur de base
+    For Each baseWS In baseWB.Worksheets
+        ' Construire un dictionnaire des entêtes → numéro de colonne
+        Set headerMap = New Scripting.Dictionary
+        For iCol = 1 To baseWS.Cells(1, baseWS.Columns.Count).End(xlToLeft).Column
+            headerMap(baseWS.Cells(1, iCol).Value) = iCol
+        Next iCol
+        
+        ' Ajouter la colonne résultat si nécessaire
+        If Not headerMap.Exists(resultCol) Then
+            headerMap(resultCol) = headerMap.Count + 1
+            baseWS.Cells(1, headerMap(resultCol)).Value = resultCol
+        End If
+        
+        ' Boucle sur chaque ligne de données
+        For iRow = 2 To baseWS.Cells(baseWS.Rows.Count, headerMap(keyCol)).End(xlUp).Row
+            keyVal   = baseWS.Cells(iRow, headerMap(keyCol)).Value
+            foundAny = False
+            allMatch = True
+            
+            ' Parcours des fichiers cibles
+            For Each file In fld.Files
+                If LCase(file.Path) <> LCase(baseWB.FullName) _
+                   And (Right(file.Name, 4) = "xlsx" Or Right(file.Name, 3) = "xls") Then
+                   
+                    On Error Resume Next
+                    Set cibleWB = Workbooks.Open(file.Path, ReadOnly:=True)
+                    On Error GoTo 0
+                    If cibleWB Is Nothing Then GoTo NextFile
+                    
+                    With cibleWB.Sheets(baseWS.Name)
+                        ' Cherche la valeur clé
+                        Dim rngFound As Range
+                        Set rngFound = .Columns(headerMap(keyCol)).Find(What:=keyVal, _
+                            LookIn:=xlValues, LookAt:=xlWhole)
+                        If Not rngFound Is Nothing Then
+                            foundAny = True
+                            ' Pour chaque colonne à vérifier
+                            Dim colName As Variant
+                            For Each colName In checkCols
+                                tgtVal = .Cells(rngFound.Row, headerMap(colName)).Value
+                                If CStr(tgtVal) <> CStr(baseWS.Cells(iRow, headerMap(colName)).Value) Then
+                                    allMatch = False
+                                    Exit For
+                                End If
+                            Next colName
+                        End If
+                    End With
+                    
+                    cibleWB.Close SaveChanges:=False
+                    Set cibleWB = Nothing
+                    
+                    If Not allMatch Then Exit For
+                End If
+NextFile:
+            Next file
+            
+            ' Si jamais pas trouvé, KO
+            If Not foundAny Then allMatch = False
+            
+            ' Écriture et coloration du résultat
+            Set cellRes = baseWS.Cells(iRow, headerMap(resultCol))
+            If allMatch Then
+                cellRes.Value = "OK"
+                cellRes.Interior.Color = vbGreen
+            Else
+                cellRes.Value = "KO"
+                cellRes.Interior.Color = vbRed
+            End If
+        Next iRow
+    Next baseWS
+    
+    MsgBox "Contrôle terminé ! Colonne '" & resultCol & "' mise à jour.", vbInformation
+End Sub
