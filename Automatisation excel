@@ -1,160 +1,119 @@
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.ss.usermodel.FillPatternType;
-import org.apache.poi.ss.usermodel.IndexedColors;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
+Option Explicit
 
-import java.io.*;
-import java.util.*;
-import java.util.stream.Collectors;
+' Fonctions de recherche avancée avec similarité
+Public Function RechercheAvancee(sourcePath As String, sheetName As String, searchValue As String, searchColumn As Variant, Optional threshold As Double = 0.8) As String
+    Dim wb As Workbook, ws As Worksheet
+    Dim colIdx As Long, lastRow As Long, cell As Range
+    Dim searchVal As String, cellVal As String
+    Dim openedHere As Boolean
+    
+    ' Normaliser la valeur recherchée (trim + minuscules)
+    searchVal = LCase(Application.Trim(CStr(searchValue)))
+    
+    ' Ouvrir le classeur source si nécessaire
+    On Error Resume Next
+    Set wb = Nothing
+    ' Vérifier si déjà ouvert
+    For Each wb In Application.Workbooks
+        If wb.FullName = sourcePath Then Exit For
+    Next wb
+    If wb Is Nothing Or wb.FullName <> sourcePath Then
+        Set wb = Application.Workbooks.Open(sourcePath, ReadOnly:=True)
+        openedHere = True
+        If wb Is Nothing Then
+            RechercheAvancee = "Erreur: impossible d'ouvrir le fichier source"
+            Exit Function
+        End If
+    End If
+    On Error GoTo 0
+    
+    ' Récupérer la feuille
+    On Error Resume Next
+    Set ws = wb.Sheets(sheetName)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        RechercheAvancee = "Erreur: feuille introuvable"
+        GoTo CleanUp
+    End If
+    
+    ' Déterminer l'index de la colonne (lettre ou numéro)
+    If IsNumeric(searchColumn) Then
+        colIdx = CLng(searchColumn)
+    Else
+        colIdx = ColumnLetterToNumber(CStr(searchColumn))
+    End If
+    If colIdx < 1 Then
+        RechercheAvancee = "Erreur: colonne invalide"
+        GoTo CleanUp
+    End If
+    
+    ' Dernière ligne de données
+    lastRow = ws.Cells(ws.Rows.Count, colIdx).End(xlUp).Row
+    
+    ' Boucle sur chaque cellule de la colonne
+    For Each cell In ws.Range(ws.Cells(1, colIdx), ws.Cells(lastRow, colIdx))
+        If Not IsError(cell.Value) Then
+            cellVal = LCase(Application.Trim(CStr(cell.Value)))
+            If Len(cellVal) > 0 Then
+                If StringSimilarity(searchVal, cellVal) >= threshold Then
+                    RechercheAvancee = cell.Value
+                    GoTo CleanUp
+                End If
+            End If
+        End If
+    Next cell
+    
+    ' Si rien trouvé
+    RechercheAvancee = "Non trouvée"
 
-public class ExcelComparator {
-    // Configuration générale
-    private static final String BASE_FILE      = "C:\\chemin\\vers\\fichier_base.xlsx";
-    private static final String TARGET_FOLDER  = "C:\\chemin\\vers\\dossier_cibles\\";
-    private static final String SHEET_NAME     = "NomDeLaFeuille"; // feuille cible du fichier de base
-    private static final String KEY_COLUMN     = "ID";
-    private static final List<String> CHECK_COLUMNS = Arrays.asList("ColA", "ColB");
-    private static final String RESULT_COLUMN  = "Statut";
-    private static final int BASE_HEADER_ROW  = 5;  // ligne d'entête (1-based) pour le fichier de base
+CleanUp:
+    ' Fermer le classeur si on l'a ouvert ici
+    If openedHere Then wb.Close SaveChanges:=False
+End Function
 
-    // Configuration spécifique à chaque fichier cible
-    private static class TargetConfig {
-        String path;
-        String sheetName;
-        int headerRow;
-        TargetConfig(String path, String sheetName, int headerRow) {
-            this.path = path;
-            this.sheetName = sheetName;
-            this.headerRow = headerRow;
-        }
-    }
+' Convertir lettre de colonne en numéro
+Private Function ColumnLetterToNumber(colLetter As String) As Long
+    Dim i As Long, result As Long
+    colLetter = UCase(colLetter)
+    For i = 1 To Len(colLetter)
+        result = result * 26 + (Asc(Mid(colLetter, i, 1)) - Asc("A") + 1)
+    Next i
+    ColumnLetterToNumber = result
+End Function
 
-    // Déclarez ici la configuration de chaque fichier cible
-    private static final List<TargetConfig> TARGET_CONFIGS = Arrays.asList(
-        new TargetConfig("C:\\chemin\\vers\\dossier_cibles\\fichier1.xlsx", "Feuille1", 4),
-        new TargetConfig("C:\\chemin\\vers\\dossier_cibles\\fichier2.xlsx", "FeuilleA", 6)
-        // ajoutez autant de fichiers que nécessaire
-    );
+' Calculer la distance de Levenshtein
+Private Function Levenshtein(s As String, t As String) As Long
+    Dim d() As Long
+    Dim n As Long, m As Long, i As Long, j As Long, cost As Long
+    Dim min1 As Long, min2 As Long, min3 As Long
+    n = Len(s): m = Len(t)
+    If n = 0 Then Levenshtein = m: Exit Function
+    If m = 0 Then Levenshtein = n: Exit Function
+    ReDim d(0 To n, 0 To m)
+    For i = 0 To n: d(i, 0) = i: Next i
+    For j = 0 To m: d(0, j) = j: Next j
+    For i = 1 To n
+        For j = 1 To m
+            If Mid(s, i, 1) = Mid(t, j, 1) Then cost = 0 Else cost = 1
+            min1 = d(i - 1, j) + 1       ' suppression
+            min2 = d(i, j - 1) + 1       ' insertion
+            min3 = d(i - 1, j - 1) + cost ' substitution
+            d(i, j) = min1
+            If min2 < d(i, j) Then d(i, j) = min2
+            If min3 < d(i, j) Then d(i, j) = min3
+        Next j
+    Next i
+    Levenshtein = d(n, m)
+End Function
 
-    public static void main(String[] args) {
-        try (Workbook baseWorkbook = WorkbookFactory.create(new File(BASE_FILE))) {
-            DataFormatter formatter = new DataFormatter();
-            FormulaEvaluator evaluator = baseWorkbook.getCreationHelper().createFormulaEvaluator();
-
-            // Styles OK / KO
-            CellStyle okStyle = baseWorkbook.createCellStyle();
-            okStyle.setFillForegroundColor(IndexedColors.GREEN.getIndex());
-            okStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            CellStyle koStyle = baseWorkbook.createCellStyle();
-            koStyle.setFillForegroundColor(IndexedColors.RED.getIndex());
-            koStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-
-            // Chargement de la feuille unique du fichier de base
-            Sheet baseSheet = baseWorkbook.getSheet(SHEET_NAME);
-            if (baseSheet == null) {
-                System.err.println("Feuille '" + SHEET_NAME + "' introuvable dans le fichier de base.");
-                return;
-            }
-
-            // Map entêtes → index (0-based)
-            Map<String, Integer> baseHeaderMap = new HashMap<>();
-            Row baseHeader = baseSheet.getRow(BASE_HEADER_ROW - 1);
-            if (baseHeader == null) {
-                System.err.println("Aucune en-tête trouvée à la ligne " + BASE_HEADER_ROW);
-                return;
-            }
-            for (Cell cell : baseHeader) {
-                String val = formatter.formatCellValue(cell, evaluator);
-                baseHeaderMap.put(val, cell.getColumnIndex());
-            }
-
-            // Vérifications de base
-            if (!baseHeaderMap.containsKey(KEY_COLUMN)) {
-                System.err.println("Colonne clé '" + KEY_COLUMN + "' introuvable.");
-                return;
-            }
-            if (!baseHeaderMap.containsKey(RESULT_COLUMN)) {
-                int newIdx = baseHeader.getLastCellNum();
-                baseHeader.createCell(newIdx).setCellValue(RESULT_COLUMN);
-                baseHeaderMap.put(RESULT_COLUMN, newIdx);
-            }
-
-            int keyColIdx    = baseHeaderMap.get(KEY_COLUMN);
-            int resultColIdx = baseHeaderMap.get(RESULT_COLUMN);
-            int lastRow      = baseSheet.getLastRowNum();
-
-            // Parcours des lignes de données
-            for (int ri = BASE_HEADER_ROW; ri <= lastRow; ri++) {
-                Row row = baseSheet.getRow(ri);
-                if (row == null) continue;
-                String keyVal = formatter.formatCellValue(row.getCell(keyColIdx), evaluator);
-
-                // Pour chaque colonne à vérifier, on liste les fichiers où la valeur est présente
-                Map<String, List<String>> foundInFiles = new LinkedHashMap<>();
-                for (String col : CHECK_COLUMNS) {
-                    foundInFiles.put(col, new ArrayList<>());
-                }
-
-                // Boucle sur chaque cible
-                for (TargetConfig cfg : TARGET_CONFIGS) {
-                    try (Workbook targetWb = WorkbookFactory.create(new File(cfg.path))) {
-                        Sheet tgtSheet = targetWb.getSheet(cfg.sheetName);
-                        if (tgtSheet == null) continue;
-
-                        // Map en-têtes cible
-                        Map<String, Integer> tgtHeaderMap = new HashMap<>();
-                        Row tgtHeader = tgtSheet.getRow(cfg.headerRow - 1);
-                        for (Cell c : tgtHeader) {
-                            String v = formatter.formatCellValue(c, evaluator);
-                            tgtHeaderMap.put(v, c.getColumnIndex());
-                        }
-
-                        // Vérifier chaque colonne
-                        for (String col : CHECK_COLUMNS) {
-                            // si colonne absente → on ne teste pas
-                            if (!baseHeaderMap.containsKey(col) || !tgtHeaderMap.containsKey(col)) continue;
-                            int tgtColIdx = tgtHeaderMap.get(col);
-                            String baseVal = formatter.formatCellValue(row.getCell(baseHeaderMap.get(col)), evaluator);
-
-                            // recherche dans toute la colonne
-                            for (int r2 = cfg.headerRow; r2 <= tgtSheet.getLastRowNum(); r2++) {
-                                Row rrow = tgtSheet.getRow(r2);
-                                if (rrow == null) continue;
-                                Cell tc = rrow.getCell(tgtColIdx);
-                                if (tc != null && baseVal.equals(formatter.formatCellValue(tc, evaluator))) {
-                                    foundInFiles.get(col).add(new File(cfg.path).getName());
-                                    break;
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        System.err.println("Erreur sur " + cfg.path + ": " + e.getMessage());
-                    }
-                }
-
-                // Préparation du texte résultat
-                String resultText = foundInFiles.entrySet().stream()
-                    .map(e -> e.getKey() + ": " + (e.getValue().isEmpty() ? "(absent)" : String.join(",", e.getValue())))
-                    .collect(Collectors.joining(" | "));
-
-                // Écriture et style
-                Cell resCell = row.getCell(resultColIdx);
-                if (resCell == null) resCell = row.createCell(resultColIdx);
-                resCell.setCellValue(resultText);
-                // on colore en vert si toutes les colonnes ont été trouvées au moins une fois, sinon en rouge
-                boolean allFound = foundInFiles.values().stream().allMatch(list -> !list.isEmpty());
-                resCell.setCellStyle(allFound ? okStyle : koStyle);
-            }
-
-            // Sauvegarde
-            String out = BASE_FILE.replaceAll("\\.xlsx?$/, "") + "_résultats.xlsx";
-            try (FileOutputStream fos = new FileOutputStream(out)) {
-                baseWorkbook.write(fos);
-            }
-            System.out.println("Fichier généré : " + out);
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        }
-    }
-}
+' Calculer le taux de similarité (0 à 1)
+Private Function StringSimilarity(s As String, t As String) As Double
+    Dim maxLen As Long, dist As Long
+    maxLen = IIf(Len(s) > Len(t), Len(s), Len(t))
+    If maxLen = 0 Then
+        StringSimilarity = 1
+    Else
+        dist = Levenshtein(s, t)
+        StringSimilarity = 1 - dist / maxLen
+    End If
+End Function
