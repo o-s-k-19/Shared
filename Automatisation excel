@@ -1,63 +1,22 @@
 Option Explicit
 
-' Fonctions de recherche avancée avec similarité
-Public Function RechercheAvancee(sourcePath As String, sheetName As String, searchValue As String, searchColumn As Variant, Optional threshold As Double = 0.8) As String
-    Dim wb As Workbook, ws As Worksheet
-    Dim colIdx As Long, lastRow As Long, cell As Range
+' UDF de recherche avancée sans chemin, utilisant directement une plage Excel
+Public Function RechercheAvancee(searchValue As Variant, sourceColumn As Range, Optional threshold As Double = 0.8) As String
+    Dim cell As Range
     Dim searchVal As String, cellVal As String
-    Dim openedHere As Boolean
     
-    ' Normaliser la valeur recherchée (trim + minuscules)
+    ' Normalisation (trim + casse insensible)
     searchVal = LCase(Application.Trim(CStr(searchValue)))
     
-    ' Ouvrir le classeur source si nécessaire
-    On Error Resume Next
-    Set wb = Nothing
-    ' Vérifier si déjà ouvert
-    For Each wb In Application.Workbooks
-        If wb.FullName = sourcePath Then Exit For
-    Next wb
-    If wb Is Nothing Or wb.FullName <> sourcePath Then
-        Set wb = Application.Workbooks.Open(sourcePath, ReadOnly:=True)
-        openedHere = True
-        If wb Is Nothing Then
-            RechercheAvancee = "Erreur: impossible d'ouvrir le fichier source"
-            Exit Function
-        End If
-    End If
-    On Error GoTo 0
-    
-    ' Récupérer la feuille
-    On Error Resume Next
-    Set ws = wb.Sheets(sheetName)
-    On Error GoTo 0
-    If ws Is Nothing Then
-        RechercheAvancee = "Erreur: feuille introuvable"
-        GoTo CleanUp
-    End If
-    
-    ' Déterminer l'index de la colonne (lettre ou numéro)
-    If IsNumeric(searchColumn) Then
-        colIdx = CLng(searchColumn)
-    Else
-        colIdx = ColumnLetterToNumber(CStr(searchColumn))
-    End If
-    If colIdx < 1 Then
-        RechercheAvancee = "Erreur: colonne invalide"
-        GoTo CleanUp
-    End If
-    
-    ' Dernière ligne de données
-    lastRow = ws.Cells(ws.Rows.Count, colIdx).End(xlUp).Row
-    
-    ' Boucle sur chaque cellule de la colonne
-    For Each cell In ws.Range(ws.Cells(1, colIdx), ws.Cells(lastRow, colIdx))
+    ' Parcours de la plage source
+    For Each cell In sourceColumn.Cells
         If Not IsError(cell.Value) Then
             cellVal = LCase(Application.Trim(CStr(cell.Value)))
             If Len(cellVal) > 0 Then
+                ' Test de similarité
                 If StringSimilarity(searchVal, cellVal) >= threshold Then
                     RechercheAvancee = cell.Value
-                    GoTo CleanUp
+                    Exit Function
                 End If
             End If
         End If
@@ -65,23 +24,9 @@ Public Function RechercheAvancee(sourcePath As String, sheetName As String, sear
     
     ' Si rien trouvé
     RechercheAvancee = "Non trouvée"
-
-CleanUp:
-    ' Fermer le classeur si on l'a ouvert ici
-    If openedHere Then wb.Close SaveChanges:=False
 End Function
 
-' Convertir lettre de colonne en numéro
-Private Function ColumnLetterToNumber(colLetter As String) As Long
-    Dim i As Long, result As Long
-    colLetter = UCase(colLetter)
-    For i = 1 To Len(colLetter)
-        result = result * 26 + (Asc(Mid(colLetter, i, 1)) - Asc("A") + 1)
-    Next i
-    ColumnLetterToNumber = result
-End Function
-
-' Calculer la distance de Levenshtein
+' Calcul de la distance de Levenshtein
 Private Function Levenshtein(s As String, t As String) As Long
     Dim d() As Long
     Dim n As Long, m As Long, i As Long, j As Long, cost As Long
@@ -95,21 +40,19 @@ Private Function Levenshtein(s As String, t As String) As Long
     For i = 1 To n
         For j = 1 To m
             If Mid(s, i, 1) = Mid(t, j, 1) Then cost = 0 Else cost = 1
-            min1 = d(i - 1, j) + 1       ' suppression
-            min2 = d(i, j - 1) + 1       ' insertion
-            min3 = d(i - 1, j - 1) + cost ' substitution
-            d(i, j) = min1
-            If min2 < d(i, j) Then d(i, j) = min2
-            If min3 < d(i, j) Then d(i, j) = min3
+            min1 = d(i - 1, j) + 1
+            min2 = d(i, j - 1) + 1
+            min3 = d(i - 1, j - 1) + cost
+            d(i, j) = WorksheetFunction.Min(min1, min2, min3)
         Next j
     Next i
     Levenshtein = d(n, m)
 End Function
 
-' Calculer le taux de similarité (0 à 1)
+' Calcul du taux de similarité (0 à 1)
 Private Function StringSimilarity(s As String, t As String) As Double
     Dim maxLen As Long, dist As Long
-    maxLen = IIf(Len(s) > Len(t), Len(s), Len(t))
+    maxLen = Application.Max(Len(s), Len(t))
     If maxLen = 0 Then
         StringSimilarity = 1
     Else
