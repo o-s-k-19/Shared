@@ -1,32 +1,65 @@
 Option Explicit
 
-' UDF de recherche avancée sans chemin, utilisant directement une plage Excel
-Public Function RechercheAvancee(searchValue As Variant, sourceColumn As Range, Optional threshold As Double = 0.8) As String
-    Dim cell As Range
-    Dim searchVal As String, cellVal As String
-    
-    ' Normalisation (trim + casse insensible)
-    searchVal = LCase(Application.Trim(CStr(searchValue)))
-    
-    ' Parcours de la plage source
-    For Each cell In sourceColumn.Cells
-        If Not IsError(cell.Value) Then
-            cellVal = LCase(Application.Trim(CStr(cell.Value)))
-            If Len(cellVal) > 0 Then
-                ' Test de similarité
-                If StringSimilarity(searchVal, cellVal) >= threshold Then
-                    RechercheAvancee = cell.Value
-                    Exit Function
-                End If
-            End If
-        End If
-    Next cell
-    
-    ' Si rien trouvé
-    RechercheAvancee = "Non trouvée"
-End Function
+' Code optimisé pour recherche avancée en bulk sans blocage Excel
 
-' Calcul de la distance de Levenshtein
+Public Sub RemplirRechercheAvanceeOptim(sourceRange As Range, searchRange As Range, resultRange As Range, Optional threshold As Double = 0.8)
+    Dim srcArr As Variant, normArr As Variant
+    Dim searchArr As Variant, resultArr As Variant
+    Dim nSource As Long, nSearch As Long
+    Dim i As Long, j As Long
+    Dim searchVal As String, bestMatch As String
+    Dim bestSim As Double, sim As Double
+
+    ' Désactiver l'affichage et les recalculs
+    With Application
+        .ScreenUpdating = False
+        .EnableEvents = False
+        .Calculation = xlCalculationManual
+    End With
+
+    ' Charger source en mémoire
+    srcArr = sourceRange.Value2
+    nSource = UBound(srcArr, 1)
+    ReDim normArr(1 To nSource, 1 To 1)
+    For i = 1 To nSource
+        normArr(i, 1) = LCase(Trim(CStr(srcArr(i, 1))))
+    Next i
+
+    ' Charger les valeurs à rechercher
+    searchArr = searchRange.Value2
+    nSearch = UBound(searchArr, 1)
+    ReDim resultArr(1 To nSearch, 1 To 1)
+
+    ' Parcours en mémoire
+    For i = 1 To nSearch
+        searchVal = LCase(Trim(CStr(searchArr(i, 1))))
+        bestSim = 0
+        bestMatch = "Non trouvée"
+        If Len(searchVal) > 0 Then
+            For j = 1 To nSource
+                sim = StringSimilarity(searchVal, normArr(j, 1))
+                If sim > bestSim Then
+                    bestSim = sim
+                    bestMatch = srcArr(j, 1)
+                    If bestSim >= threshold Then Exit For
+                End If
+            Next j
+        End If
+        resultArr(i, 1) = bestMatch
+    Next i
+
+    ' Écrire le résultat d'un coup
+    resultRange.Value = resultArr
+
+    ' Restaurer paramètres Excel
+    With Application
+        .Calculation = xlCalculationAutomatic
+        .EnableEvents = True
+        .ScreenUpdating = True
+    End With
+End Sub
+
+' Distance de Levenshtein
 Private Function Levenshtein(s As String, t As String) As Long
     Dim d() As Long
     Dim n As Long, m As Long, i As Long, j As Long, cost As Long
@@ -49,7 +82,7 @@ Private Function Levenshtein(s As String, t As String) As Long
     Levenshtein = d(n, m)
 End Function
 
-' Calcul du taux de similarité (0 à 1)
+' Taux de similarité (0 à 1)
 Private Function StringSimilarity(s As String, t As String) As Double
     Dim maxLen As Long, dist As Long
     maxLen = Application.Max(Len(s), Len(t))
