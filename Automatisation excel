@@ -1,23 +1,167 @@
-Sub ListerFeuillesSource()
-    Dim cfgWS    As Worksheet
-    Dim wb       As Workbook
-    Dim p        As String, msg As String
-    On Error Resume Next
-    Set cfgWS = ThisWorkbook.Sheets("programme")
-    On Error GoTo 0
-    If cfgWS Is Nothing Then
-        MsgBox "Feuille 'programme' introuvable dans ce classeur.", vbExclamation
-        Exit Sub
+Option Explicit
+
+' Macro pour vérifier 4 champs entre deux fichiers avec synthèse des non-trouvés et statistiques
+Public Sub VerifierChamps()
+    Dim cfgWS       As Worksheet
+    Dim srcWB       As Workbook, srcWS As Worksheet
+    Dim tgtWB       As Workbook, tgtWS As Worksheet
+    Dim dict        As Object
+    Dim key         As String
+    Dim lastRowSrc  As Long, lastRowTgt As Long
+    Dim i As Long, j As Long
+    
+    Const configSheetName As String = "programme"
+    ' Variables config source
+    Dim sourcePath  As String, sourceSheet As String
+    Dim srcStartRow As Long, srcCols(1 To 4) As String
+    ' Variables config cible
+    Dim targetPath  As String, targetSheet As String
+    Dim tgtStartRow As Long, tgtCols(1 To 4) As String, resultCol As String
+    
+    ' --- Charger la configuration
+    Set cfgWS = GetSheetByNameInsensitive(ThisWorkbook, configSheetName)
+    If cfgWS Is Nothing Then MsgBox "Feuille '" & configSheetName & "' introuvable.", vbCritical: Exit Sub
+    With cfgWS
+        sourcePath   = Trim(.Range("B3").Value)
+        sourceSheet  = Trim(.Range("B4").Value)
+        srcStartRow  = CLng(.Range("B5").Value)
+        srcCols(1)   = Trim(.Range("B6").Value)
+        srcCols(2)   = Trim(.Range("B7").Value)
+        srcCols(3)   = Trim(.Range("B8").Value)
+        srcCols(4)   = Trim(.Range("B9").Value)
+        targetPath   = Trim(.Range("B10").Value)
+        targetSheet  = Trim(.Range("B11").Value)
+        tgtStartRow  = CLng(.Range("B12").Value)
+        tgtCols(1)   = Trim(.Range("B13").Value)
+        tgtCols(2)   = Trim(.Range("B14").Value)
+        tgtCols(3)   = Trim(.Range("B15").Value)
+        tgtCols(4)   = Trim(.Range("B16").Value)
+        resultCol    = Trim(.Range("B17").Value)
+    End With
+    ' Validation
+    If sourcePath = "" Or sourceSheet = "" Or srcStartRow < 1 Then
+        MsgBox "Paramètres source invalides (B3:B9).", vbCritical: Exit Sub
     End If
-    p = cfgWS.Range("B3").Value  ' Chemin du source
-    If Dir(p) = "" Then
-        MsgBox "Fichier introuvable : " & p, vbExclamation
-        Exit Sub
+    If targetPath = "" Or targetSheet = "" Or tgtStartRow < 1 Or resultCol = "" Then
+        MsgBox "Paramètres cible invalides (B10:B17).", vbCritical: Exit Sub
     End If
-    Set wb = Workbooks.Open(p, ReadOnly:=True)
-    For Each ws In wb.Sheets
-        msg = msg & "· " & ws.Name & vbCrLf
-    Next
-    wb.Close False
-    MsgBox "Feuilles dans le classeur source :" & vbCrLf & msg, vbInformation
+    
+    ' --- Charger source et construire le dictionnaire
+    Set dict = CreateObject("Scripting.Dictionary")
+    On Error Resume Next: Set srcWB = Workbooks.Open(sourcePath, ReadOnly:=True): On Error GoTo 0
+    If srcWB Is Nothing Then MsgBox "Impossible d'ouvrir source: " & sourcePath, vbCritical: Exit Sub
+    Set srcWS = GetSheetByNameInsensitive(srcWB, sourceSheet)
+    If srcWS Is Nothing Then
+        Dim lf As String, wsTmp As Worksheet
+        For Each wsTmp In srcWB.Sheets: lf = lf & "• " & wsTmp.Name & vbCrLf: Next
+        MsgBox "Feuille source '" & sourceSheet & "' introuvable." & vbCrLf & "Feuilles disponibles:" & vbCrLf & lf, vbCritical
+        srcWB.Close False: Exit Sub
+    End If
+    lastRowSrc = srcWS.Cells(srcWS.Rows.Count, ColumnLetterToNumber(srcCols(1))).End(xlUp).Row
+    For i = srcStartRow To lastRowSrc
+        key = ""
+        For j = 1 To 4: key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value): Next j
+        dict(key) = False
+    Next i
+    srcWB.Close False
+    
+    ' --- Vérifier dans le fichier cible
+    On Error Resume Next: Set tgtWB = Workbooks.Open(targetPath): On Error GoTo 0
+    If tgtWB Is Nothing Then MsgBox "Impossible d'ouvrir cible: " & targetPath, vbCritical: Exit Sub
+    Set tgtWS = GetSheetByNameInsensitive(tgtWB, targetSheet)
+    If tgtWS Is Nothing Then
+        lf = "": For Each wsTmp In tgtWB.Sheets: lf = lf & "• " & wsTmp.Name & vbCrLf: Next
+        MsgBox "Feuille cible '" & targetSheet & "' introuvable." & vbCrLf & "Feuilles disponibles:" & vbCrLf & lf, vbCritical
+        tgtWB.Close False: Exit Sub
+    End If
+    lastRowTgt = tgtWS.Cells(tgtWS.Rows.Count, ColumnLetterToNumber(tgtCols(1))).End(xlUp).Row
+    ' Ecrire en-tête résultat si absent
+    If tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "" Then
+        tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "Result"
+    End If
+    For i = tgtStartRow To lastRowTgt
+        key = ""
+        For j = 1 To 4: key = key & "|" & CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value): Next j
+        If dict.Exists(key) Then
+            dict(key) = True
+            tgtWS.Cells(i, ColumnLetterToNumber(resultCol)).Value = "O"
+        Else
+            tgtWS.Cells(i, ColumnLetterToNumber(resultCol)).Value = "N"
+        End If
+    Next i
+    tgtWB.Save: tgtWB.Close False
+    
+    ' --- Générer la synthèse dans ce classeur
+    Dim synthWS As Worksheet
+    On Error Resume Next: Set synthWS = ThisWorkbook.Sheets("synthese"): On Error GoTo 0
+    If synthWS Is Nothing Then
+        Set synthWS = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+        synthWS.Name = "synthese"
+    Else
+        synthWS.Cells.Clear
+    End If
+    ' Copier l'en-tête complète du source
+    Dim hdrRow As Long, lastColSrc As Long
+    hdrRow = srcStartRow - 1
+    lastColSrc = srcWS.Cells(hdrRow, srcWS.Columns.Count).End(xlToLeft).Column
+    For j = 1 To lastColSrc: synthWS.Cells(1, j).Value = srcWS.Cells(hdrRow, j).Value: Next j
+    ' Lister les lignes non trouvées
+    Dim outR As Long: outR = 2
+    Dim countFound As Long, countNotFound As Long
+    For i = srcStartRow To lastRowSrc
+        key = ""
+        For j = 1 To 4: key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value): Next j
+        If dict(key) = False Then
+            countNotFound = countNotFound + 1
+            For j = 1 To lastColSrc: synthWS.Cells(outR, j).Value = srcWS.Cells(i, j).Value: Next j
+            outR = outR + 1
+        Else
+            countFound = countFound + 1
+        End If
+    Next i
+    ' Afficher les statistiques
+    Dim totalRows As Long: totalRows = dict.Count
+    Dim pctF As Double, pctN As Double
+    If totalRows > 0 Then pctF = countFound / totalRows: pctN = countNotFound / totalRows
+    Dim statR As Long: statR = outR + 1
+    synthWS.Cells(statR, 1).Value = "Total lignes": synthWS.Cells(statR, 2).Value = totalRows
+    synthWS.Cells(statR + 1, 1).Value = "Lignes trouvées": synthWS.Cells(statR + 1, 2).Value = countFound: synthWS.Cells(statR + 1, 3).Value = Format(pctF, "0.00%")
+    synthWS.Cells(statR + 2, 1).Value = "Lignes non trouvées": synthWS.Cells(statR + 2, 2).Value = countNotFound: synthWS.Cells(statR + 2, 3).Value = Format(pctN, "0.00%")
+    
+    MsgBox "Vérification et synthèse terminées !", vbInformation
 End Sub
+
+' >>> Créer un bouton sur la feuille Programme
+Public Sub AjouterBoutonVerifier()
+    Dim cfgWS As Worksheet, btn As Button
+    Const configSheetName As String = "programme"
+    Set cfgWS = GetSheetByNameInsensitive(ThisWorkbook, configSheetName)
+    If cfgWS Is Nothing Then MsgBox "Feuille '" & configSheetName & "' introuvable.", vbCritical: Exit Sub
+    For Each btn In cfgWS.Buttons: If btn.Caption = "Exécuter Vérification" Then btn.Delete: Next btn
+    With cfgWS
+        Set btn = .Buttons.Add(.Range("D3").Left, .Range("D3").Top, 150, 30)
+        btn.OnAction = "VerifierChamps"
+        btn.Caption = "Exécuter Vérification"
+        btn.Name = "btnVerifier"
+    End With
+End Sub
+
+' Retrouve une feuille insensible à la casse
+Private Function GetSheetByNameInsensitive(wb As Workbook, sheetName As String) As Worksheet
+    Dim ws As Worksheet
+    For Each ws In wb.Sheets
+        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then
+            Set GetSheetByNameInsensitive = ws: Exit Function
+        End If
+    Next ws
+End Function
+
+' Conversion lettre de colonne → numéro
+Private Function ColumnLetterToNumber(colLetter As String) As Long
+    Dim i As Long, result As Long
+    colLetter = UCase(colLetter)
+    For i = 1 To Len(colLetter)
+        result = result * 26 + (Asc(Mid(colLetter, i, 1)) - Asc("A") + 1)
+    Next i
+    ColumnLetterToNumber = result
+End Function
