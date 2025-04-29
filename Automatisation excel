@@ -54,25 +54,28 @@ Public Sub VerifierChamps()
     If srcWS Is Nothing Then
         Dim lf As String, wsTmp As Worksheet
         For Each wsTmp In srcWB.Sheets: lf = lf & "• " & wsTmp.Name & vbCrLf: Next
-        MsgBox "Feuille source '" & sourceSheet & "' introuvable." & vbCrLf & "Feuilles disponibles:" & vbCrLf & lf, vbCritical
+        MsgBox "Feuille source '" & sourceSheet & "' introuvable." & vbCrLf & _
+               "Feuilles disponibles:" & vbCrLf & lf, vbCritical
         srcWB.Close False: Exit Sub
     End If
     lastRowSrc = srcWS.Cells(srcWS.Rows.Count, ColumnLetterToNumber(srcCols(1))).End(xlUp).Row
     For i = srcStartRow To lastRowSrc
         key = ""
         For j = 1 To 4: key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value): Next j
+        ' Initialize with False (not found)
         dict(key) = False
     Next i
-    srcWB.Close False
+    ' Keep source open for synthese
     
     ' --- Vérifier dans le fichier cible
     On Error Resume Next: Set tgtWB = Workbooks.Open(targetPath): On Error GoTo 0
-    If tgtWB Is Nothing Then MsgBox "Impossible d'ouvrir cible: " & targetPath, vbCritical: Exit Sub
+    If tgtWB Is Nothing Then MsgBox "Impossible d'ouvrir cible: " & targetPath, vbCritical: srcWB.Close False: Exit Sub
     Set tgtWS = GetSheetByNameInsensitive(tgtWB, targetSheet)
     If tgtWS Is Nothing Then
         lf = "": For Each wsTmp In tgtWB.Sheets: lf = lf & "• " & wsTmp.Name & vbCrLf: Next
-        MsgBox "Feuille cible '" & targetSheet & "' introuvable." & vbCrLf & "Feuilles disponibles:" & vbCrLf & lf, vbCritical
-        tgtWB.Close False: Exit Sub
+        MsgBox "Feuille cible '" & targetSheet & "' introuvable." & vbCrLf & _
+               "Feuilles disponibles:" & vbCrLf & lf, vbCritical
+        tgtWB.Close False: srcWB.Close False: Exit Sub
     End If
     lastRowTgt = tgtWS.Cells(tgtWS.Rows.Count, ColumnLetterToNumber(tgtCols(1))).End(xlUp).Row
     ' Ecrire en-tête résultat si absent
@@ -93,7 +96,7 @@ Public Sub VerifierChamps()
     
     ' --- Générer la synthèse dans ce classeur
     Dim synthWS As Worksheet
-    On Error Resume Next: Set synthWS = ThisWorkbook.Sheets("synthese"): On Error GoTo 0
+    On Error Resume Next: Set synthWS = GetSheetByNameInsensitive(ThisWorkbook, "synthese"): On Error GoTo 0
     If synthWS Is Nothing Then
         Set synthWS = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
         synthWS.Name = "synthese"
@@ -128,6 +131,9 @@ Public Sub VerifierChamps()
     synthWS.Cells(statR + 1, 1).Value = "Lignes trouvées": synthWS.Cells(statR + 1, 2).Value = countFound: synthWS.Cells(statR + 1, 3).Value = Format(pctF, "0.00%")
     synthWS.Cells(statR + 2, 1).Value = "Lignes non trouvées": synthWS.Cells(statR + 2, 2).Value = countNotFound: synthWS.Cells(statR + 2, 3).Value = Format(pctN, "0.00%")
     
+    ' Fermer le classeur source après synthèse
+    srcWB.Close False
+    
     MsgBox "Vérification et synthèse terminées !", vbInformation
 End Sub
 
@@ -150,9 +156,7 @@ End Sub
 Private Function GetSheetByNameInsensitive(wb As Workbook, sheetName As String) As Worksheet
     Dim ws As Worksheet
     For Each ws In wb.Sheets
-        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then
-            Set GetSheetByNameInsensitive = ws: Exit Function
-        End If
+        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then Set GetSheetByNameInsensitive = ws: Exit Function
     Next ws
 End Function
 
