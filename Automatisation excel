@@ -7,16 +7,16 @@ Public Sub VerifierChamps()
     Dim tgtWB       As Workbook, tgtWS As Worksheet
     Dim dict        As Object
     Dim key         As String
-    Dim lastRowSrc  As Long, lastRowTgt As Long
     Dim i As Long, j As Long
     
     Const configSheetName As String = "programme"
     ' Variables config source
     Dim sourcePath  As String, sourceSheet As String
-    Dim srcStartRow As Long, srcCols(1 To 4) As String
+    Dim srcStartRow As Long, srcEndRow As Long, srcCols(1 To 4) As String
     ' Variables config cible
     Dim targetPath  As String, targetSheet As String
-    Dim tgtStartRow As Long, tgtCols(1 To 4) As String, resultCol As String
+    Dim tgtStartRow As Long, tgtEndRow As Long, tgtCols(1 To 4) As String
+    Dim resultCol   As String
     
     ' --- Charger la configuration
     Set cfgWS = GetSheetByNameInsensitive(ThisWorkbook, configSheetName)
@@ -25,25 +25,27 @@ Public Sub VerifierChamps()
         sourcePath   = Trim(.Range("B3").Value)
         sourceSheet  = Trim(.Range("B4").Value)
         srcStartRow  = CLng(.Range("B5").Value)
-        srcCols(1)   = Trim(.Range("B6").Value)
-        srcCols(2)   = Trim(.Range("B7").Value)
-        srcCols(3)   = Trim(.Range("B8").Value)
-        srcCols(4)   = Trim(.Range("B9").Value)
-        targetPath   = Trim(.Range("B10").Value)
-        targetSheet  = Trim(.Range("B11").Value)
-        tgtStartRow  = CLng(.Range("B12").Value)
-        tgtCols(1)   = Trim(.Range("B13").Value)
-        tgtCols(2)   = Trim(.Range("B14").Value)
-        tgtCols(3)   = Trim(.Range("B15").Value)
-        tgtCols(4)   = Trim(.Range("B16").Value)
-        resultCol    = Trim(.Range("B17").Value)
+        srcEndRow    = CLng(.Range("B6").Value)
+        srcCols(1)   = Trim(.Range("B7").Value)
+        srcCols(2)   = Trim(.Range("B8").Value)
+        srcCols(3)   = Trim(.Range("B9").Value)
+        srcCols(4)   = Trim(.Range("B10").Value)
+        targetPath   = Trim(.Range("B11").Value)
+        targetSheet  = Trim(.Range("B12").Value)
+        tgtStartRow  = CLng(.Range("B13").Value)
+        tgtEndRow    = CLng(.Range("B14").Value)
+        tgtCols(1)   = Trim(.Range("B15").Value)
+        tgtCols(2)   = Trim(.Range("B16").Value)
+        tgtCols(3)   = Trim(.Range("B17").Value)
+        tgtCols(4)   = Trim(.Range("B18").Value)
+        resultCol    = Trim(.Range("B19").Value)
     End With
-    ' Validation
-    If sourcePath = "" Or sourceSheet = "" Or srcStartRow < 1 Then
-        MsgBox "Paramètres source invalides (B3:B9).", vbCritical: Exit Sub
+    ' Validation des paramètres
+    If sourcePath = "" Or sourceSheet = "" Or srcStartRow < 1 Or srcEndRow < srcStartRow Then
+        MsgBox "Paramètres source invalides (B3:B6).", vbCritical: Exit Sub
     End If
-    If targetPath = "" Or targetSheet = "" Or tgtStartRow < 1 Or resultCol = "" Then
-        MsgBox "Paramètres cible invalides (B10:B17).", vbCritical: Exit Sub
+    If targetPath = "" Or targetSheet = "" Or tgtStartRow < 1 Or tgtEndRow < tgtStartRow Or resultCol = "" Then
+        MsgBox "Paramètres cible invalides (B11:B14, B19).", vbCritical: Exit Sub
     End If
     
     ' --- Charger source et construire le dictionnaire
@@ -52,39 +54,35 @@ Public Sub VerifierChamps()
     If srcWB Is Nothing Then MsgBox "Impossible d'ouvrir source: " & sourcePath, vbCritical: Exit Sub
     Set srcWS = GetSheetByNameInsensitive(srcWB, sourceSheet)
     If srcWS Is Nothing Then
-        Dim lf As String, wsTmp As Worksheet
-        For Each wsTmp In srcWB.Sheets: lf = lf & "• " & wsTmp.Name & vbCrLf: Next
-        MsgBox "Feuille source '" & sourceSheet & "' introuvable." & vbCrLf & _
-               "Feuilles disponibles:" & vbCrLf & lf, vbCritical
+        MsgBox "Feuille source '" & sourceSheet & "' introuvable.", vbCritical
         srcWB.Close False: Exit Sub
     End If
-    lastRowSrc = srcWS.Cells(srcWS.Rows.Count, ColumnLetterToNumber(srcCols(1))).End(xlUp).Row
-    For i = srcStartRow To lastRowSrc
+    For i = srcStartRow To srcEndRow
         key = ""
-        For j = 1 To 4: key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value): Next j
-        ' Initialize with False (not found)
+        For j = 1 To 4
+            key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)
+        Next j
         dict(key) = False
     Next i
-    ' Keep source open for synthese
+    ' Garder srcWB ouvert pour synthèse de l'en-tête
     
-    ' --- Vérifier dans le fichier cible
+    ' --- Ouvrir et vérifier la cible
     On Error Resume Next: Set tgtWB = Workbooks.Open(targetPath): On Error GoTo 0
     If tgtWB Is Nothing Then MsgBox "Impossible d'ouvrir cible: " & targetPath, vbCritical: srcWB.Close False: Exit Sub
     Set tgtWS = GetSheetByNameInsensitive(tgtWB, targetSheet)
     If tgtWS Is Nothing Then
-        lf = "": For Each wsTmp In tgtWB.Sheets: lf = lf & "• " & wsTmp.Name & vbCrLf: Next
-        MsgBox "Feuille cible '" & targetSheet & "' introuvable." & vbCrLf & _
-               "Feuilles disponibles:" & vbCrLf & lf, vbCritical
+        MsgBox "Feuille cible '" & targetSheet & "' introuvable.", vbCritical
         tgtWB.Close False: srcWB.Close False: Exit Sub
     End If
-    lastRowTgt = tgtWS.Cells(tgtWS.Rows.Count, ColumnLetterToNumber(tgtCols(1))).End(xlUp).Row
     ' Ecrire en-tête résultat si absent
     If tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "" Then
         tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "Result"
     End If
-    For i = tgtStartRow To lastRowTgt
+    For i = tgtStartRow To tgtEndRow
         key = ""
-        For j = 1 To 4: key = key & "|" & CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value): Next j
+        For j = 1 To 4
+            key = key & "|" & CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value)
+        Next j
         If dict.Exists(key) Then
             dict(key) = True
             tgtWS.Cells(i, ColumnLetterToNumber(resultCol)).Value = "O"
@@ -103,17 +101,21 @@ Public Sub VerifierChamps()
     Else
         synthWS.Cells.Clear
     End If
-    ' Copier l'en-tête complète du source
+    ' Copier en-tête du source
     Dim hdrRow As Long, lastColSrc As Long
     hdrRow = srcStartRow - 1
     lastColSrc = srcWS.Cells(hdrRow, srcWS.Columns.Count).End(xlToLeft).Column
-    For j = 1 To lastColSrc: synthWS.Cells(1, j).Value = srcWS.Cells(hdrRow, j).Value: Next j
-    ' Lister les lignes non trouvées
+    For j = 1 To lastColSrc
+        synthWS.Cells(1, j).Value = srcWS.Cells(hdrRow, j).Value
+    Next j
+    ' Lister les lignes non trouvées du source
     Dim outR As Long: outR = 2
     Dim countFound As Long, countNotFound As Long
-    For i = srcStartRow To lastRowSrc
+    For i = srcStartRow To srcEndRow
         key = ""
-        For j = 1 To 4: key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value): Next j
+        For j = 1 To 4
+            key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)
+        Next j
         If dict(key) = False Then
             countNotFound = countNotFound + 1
             For j = 1 To lastColSrc: synthWS.Cells(outR, j).Value = srcWS.Cells(i, j).Value: Next j
@@ -122,16 +124,18 @@ Public Sub VerifierChamps()
             countFound = countFound + 1
         End If
     Next i
-    ' Afficher les statistiques
-    Dim totalRows As Long: totalRows = dict.Count
+    ' Statistiques
+    Dim totalSrc As Long: totalSrc = srcEndRow - srcStartRow + 1
+    Dim totalTgt As Long: totalTgt = tgtEndRow - tgtStartRow + 1
     Dim pctF As Double, pctN As Double
-    If totalRows > 0 Then pctF = countFound / totalRows: pctN = countNotFound / totalRows
+    If totalSrc > 0 Then pctF = countFound / totalSrc: pctN = countNotFound / totalSrc
     Dim statR As Long: statR = outR + 1
-    synthWS.Cells(statR, 1).Value = "Total lignes": synthWS.Cells(statR, 2).Value = totalRows
+    synthWS.Cells(statR, 1).Value = "Total source": synthWS.Cells(statR, 2).Value = totalSrc
     synthWS.Cells(statR + 1, 1).Value = "Lignes trouvées": synthWS.Cells(statR + 1, 2).Value = countFound: synthWS.Cells(statR + 1, 3).Value = Format(pctF, "0.00%")
     synthWS.Cells(statR + 2, 1).Value = "Lignes non trouvées": synthWS.Cells(statR + 2, 2).Value = countNotFound: synthWS.Cells(statR + 2, 3).Value = Format(pctN, "0.00%")
+    synthWS.Cells(statR + 4, 1).Value = "Total cible (plage)": synthWS.Cells(statR + 4, 2).Value = totalTgt
     
-    ' Fermer le classeur source après synthèse
+    ' Fermer le classeur source
     srcWB.Close False
     
     MsgBox "Vérification et synthèse terminées !", vbInformation
