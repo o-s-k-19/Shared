@@ -1,143 +1,23 @@
-Option Explicit
-
-' Macro pour vérifier 4 champs entre deux fichiers avec configuration depuis la feuille Programme (insensible à la casse)
-Public Sub VerifierChamps()
-    Dim cfgWS        As Worksheet
-    Dim srcWB        As Workbook, srcWS As Worksheet
-    Dim tgtWB        As Workbook, tgtWS As Worksheet
-    Dim dict         As Object
-    Dim key          As String
-    Dim lastRowSrc   As Long, lastRowTgt As Long
-    Dim i As Long, j As Long
-    
-    Const configSheetName As String = "programme"
-    
-    ' --- Récupérer la feuille de configuration sans erreur
-    Set cfgWS = GetSheetByNameInsensitive(ThisWorkbook, configSheetName)
+Sub ListerFeuillesSource()
+    Dim cfgWS    As Worksheet
+    Dim wb       As Workbook
+    Dim p        As String, msg As String
+    On Error Resume Next
+    Set cfgWS = ThisWorkbook.Sheets("programme")
+    On Error GoTo 0
     If cfgWS Is Nothing Then
-        Dim shtList As String, wsTemp As Worksheet
-        For Each wsTemp In ThisWorkbook.Sheets
-            shtList = shtList & """" & wsTemp.Name & """, "
-        Next
-        If Len(shtList) > 2 Then shtList = Left(shtList, Len(shtList) - 2)
-        MsgBox "Feuille de configuration '" & configSheetName & "' introuvable." & vbCrLf & _
-               "Feuilles disponibles : " & shtList, vbCritical
+        MsgBox "Feuille 'programme' introuvable dans ce classeur.", vbExclamation
         Exit Sub
     End If
-    
-    ' Variables config source
-    Dim sourcePath    As String, sourceSheet As String
-    Dim srcStartRow   As Long
-    Dim srcCols(1 To 4) As String
-    ' Variables config cible
-    Dim targetPath    As String, targetSheet As String
-    Dim tgtStartRow   As Long
-    Dim tgtCols(1 To 4) As String
-    Dim resultCol     As String
-    
-    ' --- Lire configuration depuis la feuille Programme (B3 à B17)
-    With cfgWS
-        sourcePath   = Trim(.Range("B3").Value)
-        sourceSheet  = Trim(.Range("B4").Value)
-        targetPath   = Trim(.Range("B5").Value)
-        targetSheet  = Trim(.Range("B6").Value)
-        srcStartRow  = CLng(.Range("B7").Value)
-        srcCols(1)   = Trim(.Range("B8").Value)
-        srcCols(2)   = Trim(.Range("B9").Value)
-        srcCols(3)   = Trim(.Range("B10").Value)
-        srcCols(4)   = Trim(.Range("B11").Value)
-        tgtStartRow  = CLng(.Range("B12").Value)
-        tgtCols(1)   = Trim(.Range("B13").Value)
-        tgtCols(2)   = Trim(.Range("B14").Value)
-        tgtCols(3)   = Trim(.Range("B15").Value)
-        tgtCols(4)   = Trim(.Range("B16").Value)
-        resultCol    = Trim(.Range("B17").Value)
-    End With
-    ' Validation des paramètres
-    If sourcePath = "" Or sourceSheet = "" Or srcStartRow < 1 Then
-        MsgBox "Paramètres source invalides (B3:B11).", vbCritical
+    p = cfgWS.Range("B3").Value  ' Chemin du source
+    If Dir(p) = "" Then
+        MsgBox "Fichier introuvable : " & p, vbExclamation
         Exit Sub
     End If
-    If targetPath = "" Or targetSheet = "" Or tgtStartRow < 1 Or resultCol = "" Then
-        MsgBox "Paramètres cible invalides (B5:B17).", vbCritical
-        Exit Sub
-    End If
-    
-    ' Créer le dictionnaire de clés source
-    Set dict = CreateObject("Scripting.Dictionary")
-    On Error Resume Next: Set srcWB = Workbooks.Open(sourcePath, ReadOnly:=True): On Error GoTo 0
-    If srcWB Is Nothing Then MsgBox "Impossible d'ouvrir le fichier source : '" & sourcePath & "'.", vbCritical: Exit Sub
-    Set srcWS = GetSheetByNameInsensitive(srcWB, sourceSheet)
-    If srcWS Is Nothing Then MsgBox "Feuille source introuvable : '" & sourceSheet & "'.", vbCritical: srcWB.Close False: Exit Sub
-    lastRowSrc = srcWS.Cells(srcWS.Rows.Count, ColumnLetterToNumber(srcCols(1))).End(xlUp).Row
-    For i = srcStartRow To lastRowSrc
-        key = ""
-        For j = 1 To 4
-            key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)
-        Next j
-        dict(key) = True
-    Next i
-    srcWB.Close False
-    
-    ' --- Ouvrir le fichier cible
-    On Error Resume Next: Set tgtWB = Workbooks.Open(targetPath): On Error GoTo 0
-    If tgtWB Is Nothing Then MsgBox "Impossible d'ouvrir le fichier cible : '" & targetPath & "'.", vbCritical: Exit Sub
-    Set tgtWS = GetSheetByNameInsensitive(tgtWB, targetSheet)
-    If tgtWS Is Nothing Then MsgBox "Feuille cible introuvable : '" & targetSheet & "'.", vbCritical: tgtWB.Close False: Exit Sub
-    
-    ' Préparer colonne résultat
-    lastRowTgt = tgtWS.Cells(tgtWS.Rows.Count, ColumnLetterToNumber(tgtCols(1))).End(xlUp).Row
-    If tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "" Then
-        tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "Result"
-    End If
-    ' Boucle de vérification et écriture
-    For i = tgtStartRow To lastRowTgt
-        key = ""
-        For j = 1 To 4
-            key = key & "|" & CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value)
-        Next j
-        tgtWS.Cells(i, ColumnLetterToNumber(resultCol)).Value = IIf(dict.Exists(key), "O", "N")
-    Next i
-    tgtWB.Save
-    tgtWB.Close False
-    
-    MsgBox "Vérification terminée !", vbInformation
-End Sub
-
-' >>> Créer un bouton sur la feuille Programme
-Public Sub AjouterBoutonVerifier()
-    Dim cfgWS As Worksheet, btn As Button
-    Const configSheetName As String = "programme"
-    Set cfgWS = GetSheetByNameInsensitive(ThisWorkbook, configSheetName)
-    If cfgWS Is Nothing Then MsgBox "Feuille '" & configSheetName & "' introuvable.", vbCritical: Exit Sub
-    ' Supprimer tout ancien bouton
-    For Each btn In cfgWS.Buttons: If btn.Caption = "Exécuter Vérification" Then btn.Delete: Next btn
-    ' Ajouter nouveau bouton
-    With cfgWS
-        Set btn = .Buttons.Add(.Range("D3").Left, .Range("D3").Top, 150, 30)
-        btn.OnAction = "VerifierChamps"
-        btn.Caption  = "Exécuter Vérification"
-        btn.Name     = "btnVerifier"
-    End With
-End Sub
-
-' Fonction utilitaire pour trouver une feuille insensible à la casse
-Private Function GetSheetByNameInsensitive(wb As Workbook, sheetName As String) As Worksheet
-    Dim ws As Worksheet
+    Set wb = Workbooks.Open(p, ReadOnly:=True)
     For Each ws In wb.Sheets
-        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then
-            Set GetSheetByNameInsensitive = ws
-            Exit Function
-        End If
-    Next ws
-End Function
-
-' Conversion lettre de colonne → numéro
-Private Function ColumnLetterToNumber(colLetter As String) As Long
-    Dim i As Long, result As Long
-    colLetter = UCase(colLetter)
-    For i = 1 To Len(colLetter)
-        result = result * 26 + (Asc(Mid(colLetter, i, 1)) - Asc("A") + 1)
-    Next i
-    ColumnLetterToNumber = result
-End Function
+        msg = msg & "· " & ws.Name & vbCrLf
+    Next
+    wb.Close False
+    MsgBox "Feuilles dans le classeur source :" & vbCrLf & msg, vbInformation
+End Sub
