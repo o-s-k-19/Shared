@@ -1,83 +1,111 @@
 Option Explicit
 
-' >>> Macro pour vérifier 4 champs définis dans la feuille Config et écrire O/N
+' Macro pour vérifier 4 champs entre deux fichiers avec config par fichier
 Public Sub VerifierChamps()
-    Dim cfgWS      As Worksheet
-    Dim baseWS     As Worksheet
-    Dim srcWB      As Workbook, srcWS As Worksheet
-    Dim dict       As Object
-    Dim key        As String
-    Dim lastRowB   As Long, lastRowS As Long
+    Dim cfgWS        As Worksheet
+    Dim srcWB        As Workbook, srcWS As Worksheet
+    Dim tgtWB        As Workbook, tgtWS As Worksheet
+    Dim dict         As Object
+    Dim key          As String
+    Dim lastRowSrc   As Long, lastRowTgt As Long
     Dim i As Long, j As Long
-    Dim sourcePath As String, sourceSheet As String
-    Dim headerRow  As Long, resultCol As String
-    Dim cols(1 To 4) As String
     
-    ' Charger la config depuis la feuille Config (cellules B3 à B10)
+    ' Variables config source
+    Dim sourcePath    As String, sourceSheet As String
+    Dim srcStartRow   As Long
+    Dim srcCols(1 To 4) As String
+    ' Variables config cible
+    Dim targetPath    As String, targetSheet As String
+    Dim tgtStartRow   As Long
+    Dim tgtCols(1 To 4) As String
+    Dim resultCol     As String
+    
+    ' --- Lire configuration depuis feuille Config
     On Error Resume Next: Set cfgWS = ThisWorkbook.Sheets("Config"): On Error GoTo 0
     If cfgWS Is Nothing Then MsgBox "Feuille 'Config' introuvable.", vbCritical: Exit Sub
     With cfgWS
-        sourcePath  = Trim(.Range("B3").Value)    ' Chemin complet du fichier source
-        sourceSheet = Trim(.Range("B4").Value)    ' Nom de la feuille source
-        headerRow   = CLng(.Range("B5").Value)    ' Ligne d'en-tête (1-based)
-        cols(1)     = Trim(.Range("B6").Value)    ' Colonne 1 à comparer
-        cols(2)     = Trim(.Range("B7").Value)    ' Colonne 2
-        cols(3)     = Trim(.Range("B8").Value)    ' Colonne 3
-        cols(4)     = Trim(.Range("B9").Value)    ' Colonne 4
-        resultCol   = Trim(.Range("B10").Value)   ' Colonne où écrire O/N
+        ' Source
+        sourcePath  = Trim(.Range("B3").Value)
+        sourceSheet = Trim(.Range("B4").Value)
+        srcStartRow = CLng(.Range("B5").Value)
+        srcCols(1)  = Trim(.Range("B6").Value)
+        srcCols(2)  = Trim(.Range("B7").Value)
+        srcCols(3)  = Trim(.Range("B8").Value)
+        srcCols(4)  = Trim(.Range("B9").Value)
+        ' Cible
+        targetPath  = Trim(.Range("B10").Value)
+        targetSheet = Trim(.Range("B11").Value)
+        tgtStartRow = CLng(.Range("B12").Value)
+        tgtCols(1)  = Trim(.Range("B13").Value)
+        tgtCols(2)  = Trim(.Range("B14").Value)
+        tgtCols(3)  = Trim(.Range("B15").Value)
+        tgtCols(4)  = Trim(.Range("B16").Value)
+        resultCol   = Trim(.Range("B17").Value)
     End With
-    ' Validation
-    If sourcePath = "" Or sourceSheet = "" Or headerRow < 1 Or resultCol = "" Then
-        MsgBox "Paramètres invalides dans Config (B3:B10).", vbCritical: Exit Sub
+    ' Valider config
+    If sourcePath = "" Or sourceSheet = "" Or srcStartRow < 1 Then
+        MsgBox "Paramètres source invalides en B3:B9.", vbCritical: Exit Sub
+    End If
+    If targetPath = "" Or targetSheet = "" Or tgtStartRow < 1 Or resultCol = "" Then
+        MsgBox "Paramètres cible invalides en B10:B17.", vbCritical: Exit Sub
     End If
     
-    Set dict   = CreateObject("Scripting.Dictionary")
-    Set baseWS = ThisWorkbook.ActiveSheet
-    
-    ' Ouvrir et lire le classeur source
+    Set dict = CreateObject("Scripting.Dictionary")
+    ' --- Charger source
     On Error Resume Next: Set srcWB = Workbooks.Open(sourcePath, ReadOnly:=True): On Error GoTo 0
-    If srcWB Is Nothing Then MsgBox "Impossible d'ouvrir '" & sourcePath & "'.", vbCritical: Exit Sub
+    If srcWB Is Nothing Then MsgBox "Impossible d'ouvrir source: " & sourcePath, vbCritical: Exit Sub
     Set srcWS = srcWB.Sheets(sourceSheet)
-    If srcWS Is Nothing Then MsgBox "Feuille '" & sourceSheet & "' introuvable.", vbCritical: srcWB.Close False: Exit Sub
-    lastRowS = srcWS.Cells(srcWS.Rows.Count, ColumnLetterToNumber(cols(1))).End(xlUp).Row
-    For i = headerRow + 1 To lastRowS
-        key = "": For j = 1 To 4: key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(cols(j))).Value): Next j
+    If srcWS Is Nothing Then MsgBox "Feuille source introuvable: " & sourceSheet, vbCritical: srcWB.Close False: Exit Sub
+    ' Construire dictionnaire clefs source
+    lastRowSrc = srcWS.Cells(srcWS.Rows.Count, ColumnLetterToNumber(srcCols(1))).End(xlUp).Row
+    For i = srcStartRow To lastRowSrc
+        key = ""
+        For j = 1 To 4
+            key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)
+        Next j
         dict(key) = True
     Next i
     srcWB.Close False
     
+    ' --- Ouvrir cible
+    On Error Resume Next: Set tgtWB = Workbooks.Open(targetPath): On Error GoTo 0
+    If tgtWB Is Nothing Then MsgBox "Impossible d'ouvrir cible: " & targetPath, vbCritical: Exit Sub
+    Set tgtWS = tgtWB.Sheets(targetSheet)
+    If tgtWS Is Nothing Then MsgBox "Feuille cible introuvable: " & targetSheet, vbCritical: tgtWB.Close False: Exit Sub
     ' Préparer résultat
-    lastRowB = baseWS.Cells(baseWS.Rows.Count, ColumnLetterToNumber(cols(1))).End(xlUp).Row
-    If baseWS.Cells(headerRow, ColumnLetterToNumber(resultCol)).Value = "" Then
-        baseWS.Cells(headerRow, ColumnLetterToNumber(resultCol)).Value = "Result"
+    lastRowTgt = tgtWS.Cells(tgtWS.Rows.Count, ColumnLetterToNumber(tgtCols(1))).End(xlUp).Row
+    If tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "" Then
+        tgtWS.Cells(tgtStartRow - 1, ColumnLetterToNumber(resultCol)).Value = "Result"
     End If
-    For i = headerRow + 1 To lastRowB
-        key = "": For j = 1 To 4: key = key & "|" & CStr(baseWS.Cells(i, ColumnLetterToNumber(cols(j))).Value): Next j
-        baseWS.Cells(i, ColumnLetterToNumber(resultCol)).Value = IIf(dict.Exists(key), "O", "N")
+    ' Boucle vérification
+    For i = tgtStartRow To lastRowTgt
+        key = ""
+        For j = 1 To 4
+            key = key & "|" & CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value)
+        Next j
+        tgtWS.Cells(i, ColumnLetterToNumber(resultCol)).Value = IIf(dict.Exists(key), "O", "N")
     Next i
+    ' Sauver et fermer
+    tgtWB.Save
+    tgtWB.Close False
     MsgBox "Vérification terminée !", vbInformation
 End Sub
 
-' >>> Ajouter un bouton sur Config pour lancer VerifierChamps
+' Créer bouton sur Config
 Public Sub AjouterBoutonVerifier()
-    Dim cfgWS As Worksheet
-    Dim btn   As Button
+    Dim cfgWS As Worksheet, btn As Button
     On Error Resume Next: Set cfgWS = ThisWorkbook.Sheets("Config"): On Error GoTo 0
     If cfgWS Is Nothing Then MsgBox "Feuille 'Config' introuvable.", vbCritical: Exit Sub
-    ' Supprimer ancien bouton si présent
-    For Each btn In cfgWS.Buttons
-        If btn.Caption = "Exécuter Vérification" Then btn.Delete
-    Next btn
-    ' Ajouter le bouton à partir de D3
+    For Each btn In cfgWS.Buttons: If btn.Caption = "Exécuter Vérification" Then btn.Delete: Next btn
     With cfgWS
         Set btn = .Buttons.Add(.Range("D3").Left, .Range("D3").Top, 150, 30)
         btn.OnAction = "VerifierChamps"
-        btn.Caption  = "Exécuter Vérification"
-        btn.Name     = "btnVerifier"
+        btn.Caption = "Exécuter Vérification"
+        btn.Name = "btnVerifier"
     End With
 End Sub
 
-' Conversion lettre de colonne → numéro
+' Lettre de colonne → numéro
 Private Function ColumnLetterToNumber(colLetter As String) As Long
     Dim i As Long, result As Long
     colLetter = UCase(colLetter)
