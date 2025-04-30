@@ -1,6 +1,6 @@
 Option Explicit
 
-' Macro pour vérifier 4 champs entre deux fichiers avec synthèse des non-trouvés et statistiques
+' Macro pour vérifier 4 champs entre deux fichiers avec synthèse stylée et insensible à la casse et aux espaces
 Public Sub VerifierChamps()
     Dim cfgWS       As Worksheet
     Dim srcWB       As Workbook, srcWS As Worksheet
@@ -10,17 +10,20 @@ Public Sub VerifierChamps()
     Dim i As Long, j As Long
     
     Const configSheetName As String = "programme"
-    ' Variables config source
+    ' Config source
     Dim sourcePath  As String, sourceSheet As String
     Dim srcStartRow As Long, srcEndRow As Long, srcCols(1 To 4) As String
-    ' Variables config cible
+    ' Config cible
     Dim targetPath  As String, targetSheet As String
     Dim tgtStartRow As Long, tgtEndRow As Long, tgtCols(1 To 4) As String
     Dim resultCol   As String
     
     ' --- Charger la configuration
     Set cfgWS = GetSheetByNameInsensitive(ThisWorkbook, configSheetName)
-    If cfgWS Is Nothing Then MsgBox "Feuille '" & configSheetName & "' introuvable.", vbCritical: Exit Sub
+    If cfgWS Is Nothing Then
+        MsgBox "Feuille '" & configSheetName & "' introuvable.", vbCritical
+        Exit Sub
+    End If
     With cfgWS
         sourcePath   = Trim(.Range("B3").Value)
         sourceSheet  = Trim(.Range("B4").Value)
@@ -40,15 +43,17 @@ Public Sub VerifierChamps()
         tgtCols(4)   = Trim(.Range("B18").Value)
         resultCol    = Trim(.Range("B19").Value)
     End With
-    ' Validation des paramètres
+    ' Validation
     If sourcePath = "" Or sourceSheet = "" Or srcStartRow < 1 Or srcEndRow < srcStartRow Then
-        MsgBox "Paramètres source invalides (B3:B6).", vbCritical: Exit Sub
+        MsgBox "Paramètres source invalides (B3:B6).", vbCritical
+        Exit Sub
     End If
     If targetPath = "" Or targetSheet = "" Or tgtStartRow < 1 Or tgtEndRow < tgtStartRow Or resultCol = "" Then
-        MsgBox "Paramètres cible invalides (B11:B14, B19).", vbCritical: Exit Sub
+        MsgBox "Paramètres cible invalides (B11:B14, B19).", vbCritical
+        Exit Sub
     End If
     
-    ' --- Charger source et construire le dictionnaire
+    ' --- Charger source et construire le dictionnaire (insensible casse & espaces)
     Set dict = CreateObject("Scripting.Dictionary")
     On Error Resume Next: Set srcWB = Workbooks.Open(sourcePath, ReadOnly:=True): On Error GoTo 0
     If srcWB Is Nothing Then MsgBox "Impossible d'ouvrir source: " & sourcePath, vbCritical: Exit Sub
@@ -60,11 +65,11 @@ Public Sub VerifierChamps()
     For i = srcStartRow To srcEndRow
         key = ""
         For j = 1 To 4
-            key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)
+            key = key & "|" & UCase(Trim(CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)))
         Next j
         dict(key) = False
     Next i
-    ' Garder srcWB ouvert pour synthèse de l'en-tête
+    ' Garde srcWB ouvert pour synthèse
     
     ' --- Ouvrir et vérifier la cible
     On Error Resume Next: Set tgtWB = Workbooks.Open(targetPath): On Error GoTo 0
@@ -81,7 +86,7 @@ Public Sub VerifierChamps()
     For i = tgtStartRow To tgtEndRow
         key = ""
         For j = 1 To 4
-            key = key & "|" & CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value)
+            key = key & "|" & UCase(Trim(CStr(tgtWS.Cells(i, ColumnLetterToNumber(tgtCols(j))).Value)))
         Next j
         If dict.Exists(key) Then
             dict(key) = True
@@ -92,7 +97,7 @@ Public Sub VerifierChamps()
     Next i
     tgtWB.Save: tgtWB.Close False
     
-    ' --- Générer la synthèse dans ce classeur
+    ' --- Générer la synthèse stylée
     Dim synthWS As Worksheet
     On Error Resume Next: Set synthWS = GetSheetByNameInsensitive(ThisWorkbook, "synthese"): On Error GoTo 0
     If synthWS Is Nothing Then
@@ -108,13 +113,18 @@ Public Sub VerifierChamps()
     For j = 1 To lastColSrc
         synthWS.Cells(1, j).Value = srcWS.Cells(hdrRow, j).Value
     Next j
-    ' Lister les lignes non trouvées du source
+    ' Styliser en-tête
+    With synthWS.Rows(1)
+        .Font.Bold = True
+        .Interior.Color = RGB(200, 200, 255)
+    End With
+    ' Lister lignes non trouvées
     Dim outR As Long: outR = 2
     Dim countFound As Long, countNotFound As Long
     For i = srcStartRow To srcEndRow
         key = ""
         For j = 1 To 4
-            key = key & "|" & CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)
+            key = key & "|" & UCase(Trim(CStr(srcWS.Cells(i, ColumnLetterToNumber(srcCols(j))).Value)))
         Next j
         If dict(key) = False Then
             countNotFound = countNotFound + 1
@@ -134,14 +144,20 @@ Public Sub VerifierChamps()
     synthWS.Cells(statR + 1, 1).Value = "Lignes trouvées": synthWS.Cells(statR + 1, 2).Value = countFound: synthWS.Cells(statR + 1, 3).Value = Format(pctF, "0.00%")
     synthWS.Cells(statR + 2, 1).Value = "Lignes non trouvées": synthWS.Cells(statR + 2, 2).Value = countNotFound: synthWS.Cells(statR + 2, 3).Value = Format(pctN, "0.00%")
     synthWS.Cells(statR + 4, 1).Value = "Total cible (plage)": synthWS.Cells(statR + 4, 2).Value = totalTgt
-    
-    ' Fermer le classeur source
+    ' Ajuster la mise en forme
+    synthWS.Columns.AutoFit
+    synthWS.Rows.AutoFit
+    ' Bordures autour des données
+    With synthWS.Range(synthWS.Cells(1, 1), synthWS.Cells(statR + 4, lastColSrc)).Borders
+        .LineStyle = xlContinuous
+    End With
+    ' Fermer source
     srcWB.Close False
     
-    MsgBox "Vérification et synthèse terminées !", vbInformation
+    MsgBox "Vérification et synthèse stylées terminées !", vbInformation
 End Sub
 
-' >>> Créer un bouton sur la feuille Programme
+' Créer un bouton sur la feuille Programme
 Public Sub AjouterBoutonVerifier()
     Dim cfgWS As Worksheet, btn As Button
     Const configSheetName As String = "programme"
@@ -167,7 +183,7 @@ End Function
 ' Conversion lettre de colonne → numéro
 Private Function ColumnLetterToNumber(colLetter As String) As Long
     Dim i As Long, result As Long
-    colLetter = UCase(colLetter)
+    colLetter = UCase(Trim(colLetter))
     For i = 1 To Len(colLetter)
         result = result * 26 + (Asc(Mid(colLetter, i, 1)) - Asc("A") + 1)
     Next i
