@@ -1,85 +1,100 @@
 Option Explicit
-Option Compare Text  ' Pour insensibilité à la casse
+Option Compare Text  ' Insensible à la casse
 
 '====================================================
 ' UDF MultiLookup : recherche unique basée sur plusieurs critères
-' Usage en cellule :
-'   =MultiLookup(TableRange, CriteriaRange, ReturnColumn)
-' - TableRange : plage incluant en-tête en première ligne et données dessous
-' - CriteriaRange : 2 lignes : première ligne = noms de colonnes à comparer (doit exister dans l'en-tête de TableRange)
-'                   deuxième ligne = valeurs à rechercher sous ces en-têtes
-' - ReturnColumn : nom exact de la colonne dont on veut renvoyer la valeur
+' Amélioré pour supporter le drag-down Excel via plages de critères séparées
 '
-Public Function MultiLookup(TableRange As Range, CriteriaRange As Range, ReturnColumn As String) As Variant
+' Usage en cellule :
+'   =MultiLookup(
+'     TableRange,            ' Plage complète avec en-tête en première ligne
+'     CriteriaHeaders,       ' Plage mono-ligne des noms de colonnes à comparer (fixe)
+'     CriteriaValues,        ' Plage mono-ligne des valeurs à comparer (glissée pour chaque ligne)
+'     ReturnColumn           ' Nom exact de la colonne à retourner
+'   )
+'
+Public Function MultiLookup(
+    TableRange As Range,
+    CriteriaHeaders As Range,
+    CriteriaValues As Range,
+    ReturnColumn As String
+) As Variant
     Dim headerMap As Object: Set headerMap = CreateObject("Scripting.Dictionary")
     Dim i As Long, j As Long, rw As Long
-    Dim tableWS As Worksheet: Set tableWS = TableRange.Worksheet
+    Dim rngWS As Worksheet: Set rngWS = TableRange.Worksheet
     Dim hdrRow As Long: hdrRow = TableRange.Row
     Dim lastRow As Long: lastRow = TableRange.Row + TableRange.Rows.Count - 1
     Dim lastCol As Long: lastCol = TableRange.Column + TableRange.Columns.Count - 1
     Dim colIndex As Long, retIndex As Long
-    Dim critCols As Long: critCols = CriteriaRange.Columns.Count
-    Dim critRow1 As Range, critRow2 As Range
-    Dim valueMatch As Boolean
-    Dim foundVal As Variant
-    Dim foundCount As Long
+    Dim critCols As Long: critCols = CriteriaHeaders.Columns.Count
+    Dim foundVal As Variant, foundCount As Long
+    Dim headerName As String, critValue As String
     
-    ' Validation CriteriaRange
-    If CriteriaRange.Rows.Count <> 2 Then
+    ' Validation des plages de critères
+    If CriteriaHeaders.Rows.Count <> 1 Or CriteriaValues.Rows.Count <> 1 Then
         MultiLookup = CVErr(xlErrRef)
         Exit Function
     End If
-    Set critRow1 = CriteriaRange.Rows(1)
-    Set critRow2 = CriteriaRange.Rows(2)
-    ' Construire mapping en-tête -> colonne
+    If critCols <> CriteriaValues.Columns.Count Then
+        MultiLookup = CVErr(xlErrRef)
+        Exit Function
+    End If
+    
+    ' Construire dictionnaire entête -> numéro de colonne
     For j = TableRange.Column To lastCol
-        headerMap(tableWS.Cells(hdrRow, j).Value) = j
+        headerMap(Trim(rngWS.Cells(hdrRow, j).Value)) = j
     Next j
     ' Vérifier ReturnColumn
-    If Not headerMap.Exists(ReturnColumn) Then
+    If Not headerMap.Exists(Trim(ReturnColumn)) Then
         MultiLookup = CVErr(xlErrNA)
         Exit Function
     End If
-    retIndex = headerMap(ReturnColumn)
-    ' Recherche ligne par ligne
-    foundCount = 0
+    retIndex = headerMap(Trim(ReturnColumn))
+    
+    ' Parcourir chaque ligne de données
     For rw = hdrRow + 1 To lastRow
-        valueMatch = True
+        Dim matchOK As Boolean: matchOK = True
         For j = 1 To critCols
-            Dim colName As String, colValue As String
-            colName = CStr(critRow1.Cells(1, j).Value)
-            colValue = CStr(critRow2.Cells(1, j).Value)
-            If Not headerMap.Exists(colName) Then
-                ' entête introuvable
-                valueMatch = False: Exit For
+            headerName = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
+            critValue = Trim(CStr(CriteriaValues.Cells(1, j).Value))
+            If Not headerMap.Exists(headerName) Then
+                matchOK = False: Exit For
             End If
-            colIndex = headerMap(colName)
-            ' comparer (insensible à casse et aux espaces)
-            If Trim(tableWS.Cells(rw, colIndex).Value) <> Trim(colValue) Then
-                valueMatch = False: Exit For
+            colIndex = headerMap(headerName)
+            ' Insensible à la casse et aux espaces
+            If Trim(rngWS.Cells(rw, colIndex).Value) <> critValue Then
+                matchOK = False: Exit For
             End If
         Next j
-        If valueMatch Then
+        If matchOK Then
             foundCount = foundCount + 1
-            foundVal = tableWS.Cells(rw, retIndex).Value
+            foundVal = rngWS.Cells(rw, retIndex).Value
             If foundCount > 1 Then
-                MultiLookup = CVErr(xlErrValue) ' doublons trouvés
+                MultiLookup = CVErr(xlErrValue) ' Plusieurs correspondances
                 Exit Function
             End If
         End If
     Next rw
+    
     If foundCount = 1 Then
         MultiLookup = foundVal
     Else
-        MultiLookup = CVErr(xlErrNA) ' non trouvé
+        MultiLookup = CVErr(xlErrNA) ' Aucune correspondance
     End If
 End Function
 
 '----------------------------------------------------
-' Procédure d'installation de l'Add-In MultiLookup
-' 1) Créer un nouveau classeur ou ouvrir le template Add-In
-' 2) Dans l'éditeur VBA, insérer ce module et tous ses code.
-' 3) Enregistrer sous type 'Complément Excel (*.xlam)'.
-' 4) Dans Excel, onglet Développeur → Compléments → Parcourir → sélectionner le .xlam.
-' 5) MultiLookup(...) est maintenant disponible comme fonction Excel.
+' Auto-open : enregistrer l'aide et la description
+Private Sub Workbook_Open()
+    Application.MacroOptions _
+        Macro:="MultiLookup", _
+        Description:="Recherche une valeur unique dans une table selon plusieurs critères.", _
+        Category:="MultiLookup", _
+        ArgumentDescriptions:=Array(
+            "Plage de la table (avec en-tête en première ligne, données en dessous)", _
+            "Plage 1×N des noms de colonnes à comparer (fixe)", _
+            "Plage 1×N des valeurs pour chaque ligne (glissé verticalement)", _
+            "Nom exact de la colonne à renvoyer"
+        )
+End Sub
 '====================================================
