@@ -1,0 +1,85 @@
+Option Explicit
+Option Compare Text  ' Pour insensibilité à la casse
+
+'====================================================
+' UDF MultiLookup : recherche unique basée sur plusieurs critères
+' Usage en cellule :
+'   =MultiLookup(TableRange, CriteriaRange, ReturnColumn)
+' - TableRange : plage incluant en-tête en première ligne et données dessous
+' - CriteriaRange : 2 lignes : première ligne = noms de colonnes à comparer (doit exister dans l'en-tête de TableRange)
+'                   deuxième ligne = valeurs à rechercher sous ces en-têtes
+' - ReturnColumn : nom exact de la colonne dont on veut renvoyer la valeur
+'
+Public Function MultiLookup(TableRange As Range, CriteriaRange As Range, ReturnColumn As String) As Variant
+    Dim headerMap As Object: Set headerMap = CreateObject("Scripting.Dictionary")
+    Dim i As Long, j As Long, rw As Long
+    Dim tableWS As Worksheet: Set tableWS = TableRange.Worksheet
+    Dim hdrRow As Long: hdrRow = TableRange.Row
+    Dim lastRow As Long: lastRow = TableRange.Row + TableRange.Rows.Count - 1
+    Dim lastCol As Long: lastCol = TableRange.Column + TableRange.Columns.Count - 1
+    Dim colIndex As Long, retIndex As Long
+    Dim critCols As Long: critCols = CriteriaRange.Columns.Count
+    Dim critRow1 As Range, critRow2 As Range
+    Dim valueMatch As Boolean
+    Dim foundVal As Variant
+    Dim foundCount As Long
+    
+    ' Validation CriteriaRange
+    If CriteriaRange.Rows.Count <> 2 Then
+        MultiLookup = CVErr(xlErrRef)
+        Exit Function
+    End If
+    Set critRow1 = CriteriaRange.Rows(1)
+    Set critRow2 = CriteriaRange.Rows(2)
+    ' Construire mapping en-tête -> colonne
+    For j = TableRange.Column To lastCol
+        headerMap(tableWS.Cells(hdrRow, j).Value) = j
+    Next j
+    ' Vérifier ReturnColumn
+    If Not headerMap.Exists(ReturnColumn) Then
+        MultiLookup = CVErr(xlErrNA)
+        Exit Function
+    End If
+    retIndex = headerMap(ReturnColumn)
+    ' Recherche ligne par ligne
+    foundCount = 0
+    For rw = hdrRow + 1 To lastRow
+        valueMatch = True
+        For j = 1 To critCols
+            Dim colName As String, colValue As String
+            colName = CStr(critRow1.Cells(1, j).Value)
+            colValue = CStr(critRow2.Cells(1, j).Value)
+            If Not headerMap.Exists(colName) Then
+                ' entête introuvable
+                valueMatch = False: Exit For
+            End If
+            colIndex = headerMap(colName)
+            ' comparer (insensible à casse et aux espaces)
+            If Trim(tableWS.Cells(rw, colIndex).Value) <> Trim(colValue) Then
+                valueMatch = False: Exit For
+            End If
+        Next j
+        If valueMatch Then
+            foundCount = foundCount + 1
+            foundVal = tableWS.Cells(rw, retIndex).Value
+            If foundCount > 1 Then
+                MultiLookup = CVErr(xlErrValue) ' doublons trouvés
+                Exit Function
+            End If
+        End If
+    Next rw
+    If foundCount = 1 Then
+        MultiLookup = foundVal
+    Else
+        MultiLookup = CVErr(xlErrNA) ' non trouvé
+    End If
+End Function
+
+'----------------------------------------------------
+' Procédure d'installation de l'Add-In MultiLookup
+' 1) Créer un nouveau classeur ou ouvrir le template Add-In
+' 2) Dans l'éditeur VBA, insérer ce module et tous ses code.
+' 3) Enregistrer sous type 'Complément Excel (*.xlam)'.
+' 4) Dans Excel, onglet Développeur → Compléments → Parcourir → sélectionner le .xlam.
+' 5) MultiLookup(...) est maintenant disponible comme fonction Excel.
+'====================================================
