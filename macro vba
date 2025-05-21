@@ -2,84 +2,93 @@ Option Explicit
 Option Compare Text  ' Insensible à la casse
 
 '====================================================
-' UDF MultiLookup : recherche unique basée sur plusieurs critères
-' Amélioré pour supporter le drag-down Excel via plages de critères séparées
+' UDF MultiLookup : recherche unique multi-critères et multi-retours
 '
 ' Usage en cellule :
 '   =MultiLookup(
-'     TableRange,            ' Plage complète avec en-tête en première ligne
-'     CriteriaHeaders,       ' Plage mono-ligne des noms de colonnes à comparer (fixe)
-'     CriteriaValues,        ' Plage mono-ligne des valeurs à comparer (glissée pour chaque ligne)
-'     ReturnColumn           ' Nom exact de la colonne à retourner
+'     TableRange,            ' Plage complète (en-tête 1re ligne + données en dessous)
+'     CriteriaHeaders,       ' 1×N nom des colonnes à comparer
+'     CriteriaValues,        ' 1×N valeurs correspondantes pour chaque ligne d'appel
+'     ReturnColumns          ' 1×M nom(s) des colonne(s) dont on veut retourner la valeur
 '   )
 '
 Public Function MultiLookup(
     TableRange As Range,
     CriteriaHeaders As Range,
     CriteriaValues As Range,
-    ReturnColumn As String
+    ReturnColumns As Range
 ) As Variant
+    Dim ws As Worksheet: Set ws = TableRange.Worksheet
+    Dim hdrRow As Long: hdrRow = TableRange.Row
+    Dim lastRow As Long: lastRow = hdrRow + TableRange.Rows.Count - 1
+    Dim lastCol As Long: lastCol = TableRange.Column + TableRange.Columns.Count - 1
     Dim headerMap As Object: Set headerMap = CreateObject("Scripting.Dictionary")
     Dim i As Long, j As Long, rw As Long
-    Dim rngWS As Worksheet: Set rngWS = TableRange.Worksheet
-    Dim hdrRow As Long: hdrRow = TableRange.Row
-    Dim lastRow As Long: lastRow = TableRange.Row + TableRange.Rows.Count - 1
-    Dim lastCol As Long: lastCol = TableRange.Column + TableRange.Columns.Count - 1
-    Dim colIndex As Long, retIndex As Long
-    Dim critCols As Long: critCols = CriteriaHeaders.Columns.Count
-    Dim foundVal As Variant, foundCount As Long
-    Dim headerName As String, critValue As String
-    
-    ' Validation des plages de critères
+    Dim critCount As Long, retCount As Long
+    Dim matchOK As Boolean
+    Dim foundRow As Long, foundCount As Long
+    Dim retNames() As String, critNames() As String, critValues() As String
+    Dim outputArr As Variant
+
+    ' Validation plages
     If CriteriaHeaders.Rows.Count <> 1 Or CriteriaValues.Rows.Count <> 1 Then
-        MultiLookup = CVErr(xlErrRef)
-        Exit Function
+        MultiLookup = CVErr(xlErrRef): Exit Function
     End If
-    If critCols <> CriteriaValues.Columns.Count Then
-        MultiLookup = CVErr(xlErrRef)
-        Exit Function
+    critCount = CriteriaHeaders.Columns.Count
+    If critCount <> CriteriaValues.Columns.Count Then
+        MultiLookup = CVErr(xlErrRef): Exit Function
     End If
-    
-    ' Construire dictionnaire entête -> numéro de colonne
+    If ReturnColumns.Rows.Count <> 1 And ReturnColumns.Columns.Count <> 1 Then
+        MultiLookup = CVErr(xlErrRef): Exit Function
+    End If
+    retCount = ReturnColumns.Cells.Count
+
+    ' Construire map entête -> colonne
     For j = TableRange.Column To lastCol
-        headerMap(Trim(rngWS.Cells(hdrRow, j).Value)) = j
+        headerMap(Trim(ws.Cells(hdrRow, j).Value)) = j
     Next j
-    ' Vérifier ReturnColumn
-    If Not headerMap.Exists(Trim(ReturnColumn)) Then
-        MultiLookup = CVErr(xlErrNA)
-        Exit Function
-    End If
-    retIndex = headerMap(Trim(ReturnColumn))
-    
-    ' Parcourir chaque ligne de données
+    ' Lire noms de critères et de retours
+    ReDim critNames(1 To critCount)
+    ReDim critValues(1 To critCount)
+    For j = 1 To critCount
+        critNames(j) = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
+        critValues(j) = Trim(CStr(CriteriaValues.Cells(1, j).Value))
+    Next j
+    ReDim retNames(1 To retCount)
+    For j = 1 To retCount
+        retNames(j) = Trim(CStr(ReturnColumns.Cells(1, j).Value))
+        If Not headerMap.Exists(retNames(j)) Then
+            MultiLookup = CVErr(xlErrNA): Exit Function
+        End If
+    Next j
+
+    ' Parcourir lignes données
     For rw = hdrRow + 1 To lastRow
-        Dim matchOK As Boolean: matchOK = True
-        For j = 1 To critCols
-            headerName = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
-            critValue = Trim(CStr(CriteriaValues.Cells(1, j).Value))
-            If Not headerMap.Exists(headerName) Then
-                matchOK = False: Exit For
-            End If
-            colIndex = headerMap(headerName)
-            ' Insensible à la casse et aux espaces
-            If Trim(rngWS.Cells(rw, colIndex).Value) <> critValue Then
+        matchOK = True
+        For j = 1 To critCount
+            If Not headerMap.Exists(critNames(j)) Then matchOK = False: Exit For
+            If Trim(CStr(ws.Cells(rw, headerMap(critNames(j))).Value)) <> critValues(j) Then
                 matchOK = False: Exit For
             End If
         Next j
         If matchOK Then
             foundCount = foundCount + 1
-            foundVal = rngWS.Cells(rw, retIndex).Value
+            foundRow = rw
             If foundCount > 1 Then
-                MultiLookup = CVErr(xlErrValue) ' Plusieurs correspondances
-                Exit Function
+                MultiLookup = CVErr(xlErrValue): Exit Function
             End If
         End If
     Next rw
-    
+
     If foundCount = 1 Then
-        MultiLookup = foundVal
+        ' Préparer tableau de retour 1×M
+        ReDim outputArr(1 To 1, 1 To retCount)
+        For j = 1 To retCount
+            outputArr(1, j) = ws.Cells(foundRow, headerMap(retNames(j))).Value
+        Next j
+        MultiLookup = outputArr
     Else
-        MultiLookup = CVErr(xlErrNA) ' Aucune correspondance
+        MultiLookup = CVErr(xlErrNA)
     End If
 End Function
 
@@ -88,13 +97,13 @@ End Function
 Private Sub Workbook_Open()
     Application.MacroOptions _
         Macro:="MultiLookup", _
-        Description:="Recherche une valeur unique dans une table selon plusieurs critères.", _
+        Description:="Recherche multi-critères et retourne une ou plusieurs colonnes.", _
         Category:="MultiLookup", _
         ArgumentDescriptions:=Array(
-            "Plage de la table (avec en-tête en première ligne, données en dessous)", _
+            "Plage de la table (avec en-tête en première ligne)", _
             "Plage 1×N des noms de colonnes à comparer (fixe)", _
-            "Plage 1×N des valeurs pour chaque ligne (glissé verticalement)", _
-            "Nom exact de la colonne à renvoyer"
+            "Plage 1×N des valeurs correspondantes par ligne", _
+            "Plage 1×M des noms des colonnes à retourner"
         )
 End Sub
 '====================================================
