@@ -2,87 +2,98 @@ Option Explicit
 Option Compare Text  ' Insensible à la casse
 
 '====================================================
-' UDF MultiLookup : recherche unique multi-critères et multi-retours
+' UDF MultiLookup : recherche multi-critères et multi-retours, 2e et 3e paramètres en Range
 '
 ' Usage en cellule :
 '   =MultiLookup(
-'     TableRange,            ' Plage complète (en-tête 1re ligne + données en dessous)
-'     CriteriaHeaders,       ' 1×N nom des colonnes à comparer
-'     CriteriaValues,        ' 1×N valeurs correspondantes pour chaque ligne d'appel
-'     ReturnColumns          ' 1×M nom(s) des colonne(s) dont on veut retourner la valeur
+'     TableRange,            ' Plage complète (entête + données)
+'     CriteriaHeaders,       ' Plage 1×N des noms de colonnes à comparer (obligatoirement un Range absolu)
+'     CriteriaValues,        ' Plage 1×N des valeurs par ligne (relative pour drag-down)
+'     ReturnColumns          ' 1×M noms des colonnes à retourner (Range ou texte comma-separated)
 '   )
 '
 Public Function MultiLookup(
     TableRange As Range,
     CriteriaHeaders As Range,
     CriteriaValues As Range,
-    ReturnColumns As Range
+    ReturnColumns As Variant
 ) As Variant
     Dim ws As Worksheet: Set ws = TableRange.Worksheet
     Dim hdrRow As Long: hdrRow = TableRange.Row
     Dim lastRow As Long: lastRow = hdrRow + TableRange.Rows.Count - 1
     Dim lastCol As Long: lastCol = TableRange.Column + TableRange.Columns.Count - 1
     Dim headerMap As Object: Set headerMap = CreateObject("Scripting.Dictionary")
-    Dim i As Long, j As Long, rw As Long
     Dim critCount As Long, retCount As Long
-    Dim matchOK As Boolean
-    Dim foundRow As Long, foundCount As Long
     Dim critNames() As String, critValues() As String, retNames() As String
-    Dim outputArr As Variant
-    Dim callRng As Range, outRng As Range
+    Dim j As Long, rw As Long, foundCount As Long, foundRow As Long
+    Dim valArr As Variant
+    Dim callCell As Range
 
-    ' Déterminer nombre de critères et retours
-    critCount = CriteriaHeaders.Cells.Count
-    If CriteriaValues.Cells.Count <> critCount Then
+    '--- Validation du type des plages critères
+    If CriteriaHeaders Is Nothing Or CriteriaValues Is Nothing Then
         MultiLookup = CVErr(xlErrRef): Exit Function
     End If
-    retCount = ReturnColumns.Cells.Count
+    If CriteriaHeaders.Columns.Count <> CriteriaValues.Columns.Count Then
+        MultiLookup = CVErr(xlErrRef): Exit Function
+    End If
+    critCount = CriteriaHeaders.Columns.Count
 
-    ' Vérifier zone de sortie libre sur la même ligne que la formule
-    Dim callCell As Range, baseRow As Long, baseCol As Long
+    '--- Déterminer retNames
+    If TypeName(ReturnColumns) = "Range" Then
+        retCount = ReturnColumns.Cells.Count
+        ReDim retNames(1 To retCount)
+        For j = 1 To retCount
+            retNames(j) = Trim(CStr(ReturnColumns.Cells(1, j).Value))
+        Next j
+    Else
+        Dim arr: arr = Split(CStr(ReturnColumns), ",")
+        retCount = UBound(arr) - LBound(arr) + 1
+        ReDim retNames(1 To retCount)
+        Dim idx As Long: idx = 1
+        For j = LBound(arr) To UBound(arr)
+            retNames(idx) = Trim(arr(j))
+            idx = idx + 1
+        Next j
+    End If
+
+    '--- Vérifier espace libre pour spill horizontal
     On Error Resume Next: Set callCell = Application.Caller: On Error GoTo 0
     If Not callCell Is Nothing Then
-        baseRow = callCell.Row
-        baseCol = callCell.Column
-        ' Vérifier que les cellules à droite jusqu'à baseCol+retCount-1 sont vides (hors formule)
         For j = 1 To retCount - 1
-            With ws.Cells(baseRow, baseCol + j)
+            With ws.Cells(callCell.Row, callCell.Column + j)
                 If .HasFormula Or Not IsEmpty(.Value2) Then
-                    MultiLookup = CVErr(xlErrRef)
-                    Exit Function
+                    MultiLookup = CVErr(xlErrRef): Exit Function
                 End If
             End With
         Next j
     End If
-                End If
-            End If
-        Next c
-    End If
 
-    ' Construire le mapping entête -> index
+    '--- Construire mapping entête -> colonne
     For j = TableRange.Column To lastCol
         headerMap(Trim(ws.Cells(hdrRow, j).Value)) = j
     Next j
-    ' Lire noms et valeurs des critères
-    ReDim critNames(1 To critCount): ReDim critValues(1 To critCount)
-    For j = 1 To critCount
-        critNames(j) = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
-        critValues(j) = Trim(CStr(CriteriaValues.Cells(1, j).Value))
-    Next j
-    ' Lire noms des colonnes à retourner
-    ReDim retNames(1 To retCount)
+    ' Valider retNames
     For j = 1 To retCount
-        retNames(j) = Trim(CStr(ReturnColumns.Cells(1, j).Value))
         If Not headerMap.Exists(retNames(j)) Then
             MultiLookup = CVErr(xlErrNA): Exit Function
         End If
     Next j
 
-    ' Recherche ligne correspondante
+    '--- Charger noms et valeurs critères (insensibles casse/espaces)
+    ReDim critNames(1 To critCount): ReDim critValues(1 To critCount)
+    For j = 1 To critCount
+        critNames(j) = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
+        critValues(j) = Trim(CStr(CriteriaValues.Cells(1, j).Value))
+        If Not headerMap.Exists(critNames(j)) Then
+            MultiLookup = CVErr(xlErrNA): Exit Function
+        End If
+    Next j
+
+    '--- Recherche unique
     For rw = hdrRow + 1 To lastRow
-        matchOK = True
+        Dim matchOK As Boolean: matchOK = True
         For j = 1 To critCount
-            If Trim(ws.Cells(rw, headerMap(critNames(j))).Value) <> critValues(j) Then
+            If Trim(CStr(ws.Cells(rw, headerMap(critNames(j))).Value)) <> critValues(j) Then
                 matchOK = False: Exit For
             End If
         Next j
@@ -95,16 +106,31 @@ Public Function MultiLookup(
         End If
     Next rw
 
+    '--- Retourner résultats
     If foundCount = 1 Then
-        ReDim outputArr(1 To 1, 1 To retCount)
+        ReDim valArr(1 To 1, 1 To retCount)
         For j = 1 To retCount
-            outputArr(1, j) = ws.Cells(foundRow, headerMap(retNames(j))).Value
+            valArr(1, j) = ws.Cells(foundRow, headerMap(retNames(j))).Value
         Next j
-        MultiLookup = outputArr
+        MultiLookup = valArr
     Else
         MultiLookup = CVErr(xlErrNA)
     End If
 End Function
 
-' NOTE: Le reste des procédures d'installation MacroOptions reste inchangé
+'----------------------------------------------------
+' Auto-open : enregistrer l'aide et la description
+Private Sub Workbook_Open()
+    Application.MacroOptions _
+        Macro:="MultiLookup", _
+        Description:="Recherche multi-critères et retourne une ou plusieurs colonnes.", _
+        Category:="MultiLookup", _
+        ArgumentDescriptions:=Array( _
+            "TableRange : plage de la table (Range)", _
+            "CriteriaHeaders : plage 1×N des en-têtes de critères (Range absolu)", _
+            "CriteriaValues : plage 1×N des valeurs de critères (Range absolu)", _
+            "ReturnColumns : plage 1×M des noms des colonnes de retour ou texte comma-separated" _
+        )
+End Sub
+
 '====================================================
