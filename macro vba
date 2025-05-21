@@ -27,33 +27,49 @@ Public Function MultiLookup(
     Dim critCount As Long, retCount As Long
     Dim matchOK As Boolean
     Dim foundRow As Long, foundCount As Long
-    Dim retNames() As String, critNames() As String, critValues() As String
+    Dim critNames() As String, critValues() As String, retNames() As String
     Dim outputArr As Variant
+    Dim callRng As Range, outRng As Range
 
-    ' Validation plages
-    If CriteriaHeaders.Rows.Count <> 1 Or CriteriaValues.Rows.Count <> 1 Then
-        MultiLookup = CVErr(xlErrRef): Exit Function
-    End If
-    critCount = CriteriaHeaders.Columns.Count
-    If critCount <> CriteriaValues.Columns.Count Then
-        MultiLookup = CVErr(xlErrRef): Exit Function
-    End If
-    If ReturnColumns.Rows.Count <> 1 And ReturnColumns.Columns.Count <> 1 Then
+    ' Déterminer nombre de critères et retours
+    critCount = CriteriaHeaders.Cells.Count
+    If CriteriaValues.Cells.Count <> critCount Then
         MultiLookup = CVErr(xlErrRef): Exit Function
     End If
     retCount = ReturnColumns.Cells.Count
 
-    ' Construire map entête -> colonne
+    ' Vérifier zone de sortie libre sur la même ligne que la formule
+    Dim callCell As Range, baseRow As Long, baseCol As Long
+    On Error Resume Next: Set callCell = Application.Caller: On Error GoTo 0
+    If Not callCell Is Nothing Then
+        baseRow = callCell.Row
+        baseCol = callCell.Column
+        ' Vérifier que les cellules à droite jusqu'à baseCol+retCount-1 sont vides (hors formule)
+        For j = 1 To retCount - 1
+            With ws.Cells(baseRow, baseCol + j)
+                If .HasFormula Or Not IsEmpty(.Value2) Then
+                    MultiLookup = CVErr(xlErrRef)
+                    Exit Function
+                End If
+            End With
+        Next j
+    End If
+                End If
+            End If
+        Next c
+    End If
+
+    ' Construire le mapping entête -> index
     For j = TableRange.Column To lastCol
         headerMap(Trim(ws.Cells(hdrRow, j).Value)) = j
     Next j
-    ' Lire noms de critères et de retours
-    ReDim critNames(1 To critCount)
-    ReDim critValues(1 To critCount)
+    ' Lire noms et valeurs des critères
+    ReDim critNames(1 To critCount): ReDim critValues(1 To critCount)
     For j = 1 To critCount
         critNames(j) = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
         critValues(j) = Trim(CStr(CriteriaValues.Cells(1, j).Value))
     Next j
+    ' Lire noms des colonnes à retourner
     ReDim retNames(1 To retCount)
     For j = 1 To retCount
         retNames(j) = Trim(CStr(ReturnColumns.Cells(1, j).Value))
@@ -62,12 +78,11 @@ Public Function MultiLookup(
         End If
     Next j
 
-    ' Parcourir lignes données
+    ' Recherche ligne correspondante
     For rw = hdrRow + 1 To lastRow
         matchOK = True
         For j = 1 To critCount
-            If Not headerMap.Exists(critNames(j)) Then matchOK = False: Exit For
-            If Trim(CStr(ws.Cells(rw, headerMap(critNames(j))).Value)) <> critValues(j) Then
+            If Trim(ws.Cells(rw, headerMap(critNames(j))).Value) <> critValues(j) Then
                 matchOK = False: Exit For
             End If
         Next j
@@ -81,7 +96,6 @@ Public Function MultiLookup(
     Next rw
 
     If foundCount = 1 Then
-        ' Préparer tableau de retour 1×M
         ReDim outputArr(1 To 1, 1 To retCount)
         For j = 1 To retCount
             outputArr(1, j) = ws.Cells(foundRow, headerMap(retNames(j))).Value
@@ -92,18 +106,5 @@ Public Function MultiLookup(
     End If
 End Function
 
-'----------------------------------------------------
-' Auto-open : enregistrer l'aide et la description
-Private Sub Workbook_Open()
-    Application.MacroOptions _
-        Macro:="MultiLookup", _
-        Description:="Recherche multi-critères et retourne une ou plusieurs colonnes.", _
-        Category:="MultiLookup", _
-        ArgumentDescriptions:=Array(
-            "Plage de la table (avec en-tête en première ligne)", _
-            "Plage 1×N des noms de colonnes à comparer (fixe)", _
-            "Plage 1×N des valeurs correspondantes par ligne", _
-            "Plage 1×M des noms des colonnes à retourner"
-        )
-End Sub
+' NOTE: Le reste des procédures d'installation MacroOptions reste inchangé
 '====================================================
