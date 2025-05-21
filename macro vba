@@ -2,19 +2,15 @@ Option Explicit
 Option Compare Text  ' Insensible à la casse
 
 '====================================================
-' UDF MultiLookup : recherche multi-critères et multi-retours, 2e et 3e paramètres en Range
-'
-' Usage en cellule :
-'   =MultiLookup(
-'     TableRange,            ' Plage complète (entête + données)
-'     CriteriaHeaders,       ' Plage 1×N des noms de colonnes à comparer (obligatoirement un Range absolu)
-'     CriteriaValues,        ' Plage 1×N des valeurs par ligne (relative pour drag-down)
-'     ReturnColumns          ' 1×M noms des colonnes à retourner (Range ou texte comma-separated)
-'   )
+' UDF MultiLookup : recherche multi-critères et multi-retours
+' - TableRange : plage (entête + données)
+' - CriteriaHeaders : plage 1×N des noms de colonnes (Range absolu) OU chaîne comma-separated fixe
+' - CriteriaValues : plage 1×N des valeurs (Range absolu)
+' - ReturnColumns : plage 1×M des noms de colonnes à retourner OU chaîne comma-separated
 '
 Public Function MultiLookup(
     TableRange As Range,
-    CriteriaHeaders As Range,
+    CriteriaHeaders As Variant,
     CriteriaValues As Range,
     ReturnColumns As Variant
 ) As Variant
@@ -26,19 +22,40 @@ Public Function MultiLookup(
     Dim critCount As Long, retCount As Long
     Dim critNames() As String, critValues() As String, retNames() As String
     Dim j As Long, rw As Long, foundCount As Long, foundRow As Long
-    Dim valArr As Variant
     Dim callCell As Range
+    Dim arr As Variant
 
-    '--- Validation du type des plages critères
-    If CriteriaHeaders Is Nothing Or CriteriaValues Is Nothing Then
+    '--- Valider TableRange
+    If TableRange Is Nothing Then
         MultiLookup = CVErr(xlErrRef): Exit Function
     End If
-    If CriteriaHeaders.Columns.Count <> CriteriaValues.Columns.Count Then
+
+    '--- Résoudre CriteriaHeaders (Range ou texte)
+    If TypeName(CriteriaHeaders) = "Range" Then
+        critCount = CriteriaHeaders.Columns.Count
+        ReDim critNames(1 To critCount)
+        For j = 1 To critCount
+            critNames(j) = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
+        Next j
+    Else
+        arr = Split(CStr(CriteriaHeaders), ",")
+        critCount = UBound(arr) - LBound(arr) + 1
+        ReDim critNames(1 To critCount)
+        For j = LBound(arr) To UBound(arr)
+            critNames(j - LBound(arr) + 1) = Trim(arr(j))
+        Next j
+    End If
+
+    '--- Valider CriteriaValues
+    If CriteriaValues Is Nothing Or CriteriaValues.Columns.Count <> critCount Then
         MultiLookup = CVErr(xlErrRef): Exit Function
     End If
-    critCount = CriteriaHeaders.Columns.Count
+    ReDim critValues(1 To critCount)
+    For j = 1 To critCount
+        critValues(j) = Trim(CStr(CriteriaValues.Cells(1, j).Value))
+    Next j
 
-    '--- Déterminer retNames
+    '--- Résoudre ReturnColumns
     If TypeName(ReturnColumns) = "Range" Then
         retCount = ReturnColumns.Cells.Count
         ReDim retNames(1 To retCount)
@@ -46,17 +63,15 @@ Public Function MultiLookup(
             retNames(j) = Trim(CStr(ReturnColumns.Cells(1, j).Value))
         Next j
     Else
-        Dim arr: arr = Split(CStr(ReturnColumns), ",")
+        arr = Split(CStr(ReturnColumns), ",")
         retCount = UBound(arr) - LBound(arr) + 1
         ReDim retNames(1 To retCount)
-        Dim idx As Long: idx = 1
         For j = LBound(arr) To UBound(arr)
-            retNames(idx) = Trim(arr(j))
-            idx = idx + 1
+            retNames(j - LBound(arr) + 1) = Trim(arr(j))
         Next j
     End If
 
-    '--- Vérifier espace libre pour spill horizontal
+    '--- Vérifier zone libre pour spill horizontal
     On Error Resume Next: Set callCell = Application.Caller: On Error GoTo 0
     If Not callCell Is Nothing Then
         For j = 1 To retCount - 1
@@ -79,21 +94,12 @@ Public Function MultiLookup(
         End If
     Next j
 
-    '--- Charger noms et valeurs critères (insensibles casse/espaces)
-    ReDim critNames(1 To critCount): ReDim critValues(1 To critCount)
-    For j = 1 To critCount
-        critNames(j) = Trim(CStr(CriteriaHeaders.Cells(1, j).Value))
-        critValues(j) = Trim(CStr(CriteriaValues.Cells(1, j).Value))
-        If Not headerMap.Exists(critNames(j)) Then
-            MultiLookup = CVErr(xlErrNA): Exit Function
-        End If
-    Next j
-
     '--- Recherche unique
     For rw = hdrRow + 1 To lastRow
         Dim matchOK As Boolean: matchOK = True
         For j = 1 To critCount
-            If Trim(CStr(ws.Cells(rw, headerMap(critNames(j))).Value)) <> critValues(j) Then
+            If Not headerMap.Exists(critNames(j)) Or _
+               Trim(CStr(ws.Cells(rw, headerMap(critNames(j))).Value)) <> critValues(j) Then
                 matchOK = False: Exit For
             End If
         Next j
@@ -108,7 +114,7 @@ Public Function MultiLookup(
 
     '--- Retourner résultats
     If foundCount = 1 Then
-        ReDim valArr(1 To 1, 1 To retCount)
+        Dim valArr: ReDim valArr(1 To 1, 1 To retCount)
         For j = 1 To retCount
             valArr(1, j) = ws.Cells(foundRow, headerMap(retNames(j))).Value
         Next j
@@ -123,14 +129,13 @@ End Function
 Private Sub Workbook_Open()
     Application.MacroOptions _
         Macro:="MultiLookup", _
-        Description:="Recherche multi-critères et retourne une ou plusieurs colonnes.", _
+        Description:="Recherche multi-critères et retourne 1…N colonnes.", _
         Category:="MultiLookup", _
         ArgumentDescriptions:=Array( _
             "TableRange : plage de la table (Range)", _
-            "CriteriaHeaders : plage 1×N des en-têtes de critères (Range absolu)", _
-            "CriteriaValues : plage 1×N des valeurs de critères (Range absolu)", _
-            "ReturnColumns : plage 1×M des noms des colonnes de retour ou texte comma-separated" _
+            "CriteriaHeaders : en-têtes des colonnes (Range ou texte comma-separated)", _
+            "CriteriaValues : valeurs de critères (Range absolu)", _
+            "ReturnColumns : colonnes à retourner (Range ou texte comma-separated)" _
         )
 End Sub
-
 '====================================================
