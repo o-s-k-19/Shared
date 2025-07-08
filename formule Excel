@@ -1,0 +1,15 @@
+=SI(
+  SOMMEPROD(
+    ((GAUCHE(A2;NBCAR(D2:D100))=D2:D100) *
+    (
+      (A2=D2:D100) +
+      (
+        STXT(A2;NBCAR(D2:D100)+1;1)="-" *
+        NBCAR(A2)=NBCAR(D2:D100)+3 *
+        OU(STXT(A2;NBCAR(D2:D100)+2;1)="p";STXT(A2;NBCAR(D2:D100)+2;1)="P") *
+        ESTERREUR(CHERCHE("-";A2;NBCAR(D2:D100)+2))
+      )
+    ))
+  >0;
+  "Oui";
+  "Non")
