@@ -15,3 +15,5 @@ Function ExtraireCodeSet(codesetName As String, tableRange As Range) As String
 
     ExtraireCodeSet = result
 End Function
+' pour vérifier si un mot se termine par un autre mot
+=SI(DROITE(A2;NBCAR(B2))=B2; "Oui"; "Non")
