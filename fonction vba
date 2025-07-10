@@ -1,0 +1,17 @@
+Function ExtraireCodeSet(codesetName As String, tableRange As Range) As String
+    Dim i As Long
+    Dim result As String
+    Dim lastRow As Long
+
+    For i = 1 To tableRange.Rows.Count
+        If tableRange.Cells(i, 1).Value = codesetName Then
+            result = result & tableRange.Cells(i, 2).Value & " : " & tableRange.Cells(i, 3).Value & Chr(10)
+        End If
+    Next i
+
+    If Len(result) > 0 Then
+        result = Left(result, Len(result) - 1) ' retirer le dernier saut de ligne
+    End If
+
+    ExtraireCodeSet = result
+End Function
