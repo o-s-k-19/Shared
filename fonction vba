@@ -31,3 +31,32 @@ Function ExtraireCodeSetAvancé(codeSetName As String, tableRange As Range, _
 End Function
 ' pour vérifier si un mot se termine par un autre mot
 =SI(DROITE(A2;NBCAR(B2))=B2; "Oui"; "Non")
+
+
+
+
+' Module : OptimisationMacros
+
+Dim ancienModeCalcul As XlCalculation
+
+Sub DebutMacro()
+    On Error Resume Next
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    ancienModeCalcul = Application.Calculation
+    Application.Calculation = xlCalculationManual
+    On Error GoTo 0
+End Sub
+
+Sub FinMacro(Optional forceRecalcul As Boolean = False)
+    On Error Resume Next
+    If forceRecalcul Then
+        Application.CalculateFull
+    End If
+    Application.Calculation = ancienModeCalcul
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    On Error GoTo 0
+End Sub
+
+
