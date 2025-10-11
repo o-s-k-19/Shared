@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Variables d'environnement (voir docker-compose)
+ORACLE_SID=${ORACLE_SID:-XE}
+PDB=${PDB_NAME:-XEPDB1}
+APP_USER=${APP_USER:-APP_USER}
+APP_PWD=${APP_PWD:-AppUser#2025}
+APP_TS=${APP_TS:-APP_TS}
+APP_TEMP_TS=${APP_TEMP_TS:-APP_TEMP_TS}
+
+SQL_SYS="sqlplus -s / as sysdba"
+SQL_APP="sqlplus -s ${APP_USER}/${APP_PWD}@localhost:1521/${PDB}"
+
+echo "==> [createDB.sh] Initialisation dans le PDB: ${PDB}"
+
+# 1) Créer tablespaces + utilisateur si absents, et droits
+${SQL_SYS} <<SQL
+whenever sqlerror exit failure
+alter session set container=${PDB};
+
+declare
+  v_cnt integer;
+begin
+  -- Tablespace permanent
+  select count(*) into v_cnt from dba_tablespaces where tablespace_name = upper('${APP_TS}');
+  if v_cnt = 0 then
+    execute immediate 'create tablespace ${APP_TS}
+      datafile ''/opt/oracle/oradata/${ORACLE_SID}/${PDB}/${APP_TS}_01.dbf''
+      size 200M autoextend on next 50M maxsize unlimited';
+  end if;
+
+  -- Tablespace temporaire
+  select count(*) into v_cnt from dba_tablespaces where tablespace_name = upper('${APP_TEMP_TS}');
+  if v_cnt = 0 then
+    execute immediate 'create temporary tablespace ${APP_TEMP_TS}
+      tempfile ''/opt/oracle/oradata/${ORACLE_SID}/${PDB}/${APP_TEMP_TS}_01.dbf''
+      size 100M autoextend on next 50M maxsize unlimited';
+  end if;
+
+  -- Utilisateur applicatif
+  select count(*) into v_cnt from cdb_users
+   where username = upper('${APP_USER}')
+     and con_id = (select con_id from v\$pdbs where name = upper('${PDB}'));
+  if v_cnt = 0 then
+    execute immediate 'create user ${APP_USER} identified by "${APP_PWD}"
+      default tablespace ${APP_TS}
+      temporary tablespace ${APP_TEMP_TS}
+      quota unlimited on ${APP_TS}';
+    execute immediate 'grant connect, resource to ${APP_USER}';
+    execute immediate 'grant create view, create sequence, create procedure to ${APP_USER}';
+  end if;
+end;
+/
+exit
+SQL
+
+echo "==> [createDB.sh] Exécution du schema.sql…"
+${SQL_APP} @/opt/oracle/scripts/setup/schema.sql
+
+echo "==> [createDB.sh] Exécution du data.sql…"
+${SQL_APP} @/opt/oracle/scripts/setup/data.sql
+
+echo "==> [createDB.sh] Terminé."
