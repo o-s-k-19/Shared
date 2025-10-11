@@ -58,6 +58,22 @@ SQL
 echo "==> [createDB.sh] Exécution du schema.sql…"
 ${SQL_APP} @/opt/oracle/scripts/setup/schema.sql
 
+
+
+-- on est sur le CDB root
+alter session set container=cdb$root;
+
+create pluggable database REC_01
+  admin user rec_admin identified by "Strong#Pwd2025"
+  file_name_convert=(
+    '/opt/oracle/oradata/XE/XEPDB1/',  -- adapte SID/PDB source
+    '/opt/oracle/oradata/XE/REC_01/'   -- dossier cible
+  );
+
+alter pluggable database REC_01 open;
+alter pluggable database REC_01 save state; -- réouverture auto au restart
+
+
 echo "==> [createDB.sh] Exécution du data.sql…"
 ${SQL_APP} @/opt/oracle/scripts/setup/data.sql
 
