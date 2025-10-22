@@ -1,0 +1,468 @@
+<!-- JSON Schema validator (networknt) -->
+<dependency>
+  <groupId>com.networknt</groupId>
+  <artifactId>json-schema-validator</artifactId>
+  <version>1.0.79</version>
+</dependency>
+
+<!-- Apache JEXL (expression evaluation) -->
+<dependency>
+  <groupId>org.apache.commons</groupId>
+  <artifactId>commons-jexl3</artifactId>
+  <version>3.2</version>
+</dependency>
+
+<!-- Datafaker (si pas déjà présent) -->
+<dependency>
+  <groupId>net.datafaker</groupId>
+  <artifactId>datafaker</artifactId>
+  <version>2.3.1</version>
+</dependency>
+
+<!-- JUnit Jupiter for tests -->
+<dependency>
+  <groupId>org.junit.jupiter</groupId>
+  <artifactId>junit-jupiter-api</artifactId>
+  <version>5.10.0</version>
+  <scope>test</scope>
+</dependency>
+<dependency>
+  <groupId>org.junit.jupiter</groupId>
+  <artifactId>junit-jupiter-engine</artifactId>
+  <version>5.10.0</version>
+  <scope>test</scope>
+</dependency>
+
+package com.acme.flowsim.schema;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Conserver l’état du job : indices round-robin par fichier dataset et valeurs temporaires
+ * (utile pour l'expression resolver).
+ */
+public class GenerationContext {
+    private final Map<String, AtomicInteger> roundRobin = new ConcurrentHashMap<>();
+    private final Map<String, Object> variables = new HashMap<>();
+
+    public int nextIndexFor(String datasetKey) {
+        return roundRobin.computeIfAbsent(datasetKey, k -> new AtomicInteger(0)).getAndIncrement();
+    }
+
+    public void setVariable(String name, Object value) { variables.put(name, value); }
+    public Object getVariable(String name) { return variables.get(name); }
+    public Map<String, Object> variables() { return variables; }
+}
+
+
+package com.acme.flowsim.schema;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+/** Résolveur générique d'une propriété */
+public interface PropertyResolver {
+    /**
+     * Résout la valeur pour une propriété donnée.
+     *
+     * @param schemaNode la node JSON Schema de la propriété
+     * @param xsource le node x-source (extension) - peut être null
+     * @param ctx génération context (roundrobin / variables)
+     * @return objet java (String/Number/Map/List/Boolean)
+     */
+    Object resolve(JsonNode schemaNode, JsonNode xsource, GenerationContext ctx);
+}
+
+
+package com.acme.flowsim.schema;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Charge et met en cache les JSON Schema depuis resources/schemas/<name>.json
+ */
+@Component
+public class SchemaLoader {
+    private final ResourceLoader loader;
+    private final ObjectMapper om;
+    private final Map<String, JsonNode> cache = new ConcurrentHashMap<>();
+
+    public SchemaLoader(ResourceLoader loader, ObjectMapper om) {
+        this.loader = loader;
+        this.om = om;
+    }
+
+    public JsonNode load(String schemaName) {
+        return cache.computeIfAbsent(schemaName, this::loadOnce);
+    }
+
+    private JsonNode loadOnce(String name) {
+        try {
+            String path = "classpath:/schemas/" + name + ".schema.json";
+            Resource r = loader.getResource(path);
+            return om.readTree(r.getInputStream());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Cannot load schema " + name, e);
+        }
+    }
+}
+
+
+package com.acme.flowsim.schema;
+
+import com.acme.flowsim.dataset.DatasetRepository;
+import com.acme.flowsim.generator.FlowGeneratorService;
+import com.acme.flowsim.resolver.DatasetResolver;
+import com.acme.flowsim.resolver.ExpressionResolver;
+import com.acme.flowsim.resolver.FakerResolver;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Component;
+
+/**
+ * Fabrique de résolveurs selon x-source.strategy.
+ */
+@Component
+public class ResolverFactory {
+
+    private final DatasetRepository datasetRepository;
+    private final FlowGeneratorService flowGeneratorService;
+
+    public ResolverFactory(DatasetRepository datasetRepository,
+                           FlowGeneratorService flowGeneratorService) {
+        this.datasetRepository = datasetRepository;
+        this.flowGeneratorService = flowGeneratorService;
+    }
+
+    public PropertyResolver of(JsonNode xsource) {
+        if (xsource == null || !xsource.has("strategy")) return null;
+        String strat = xsource.get("strategy").asText();
+        return switch (strat) {
+            case "dataset" -> new DatasetResolver(datasetRepository);
+            case "faker" -> new FakerResolver();
+            case "uuid", "now", "constant", "range", "probability" -> new FakerResolver(); // fallback simple
+            case "expression" -> new ExpressionResolver();
+            default -> null;
+        };
+    }
+}
+
+
+package com.acme.flowsim.resolver;
+
+import com.acme.flowsim.dataset.DatasetRepository;
+import com.acme.flowsim.schema.GenerationContext;
+import com.acme.flowsim.schema.PropertyResolver;
+import com.fasterxml.jackson.databind.JsonNode;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+
+/**
+ * x-source: { "strategy":"dataset", "file":"users.csv", "column":"email", "mode":"random|roundrobin" }
+ */
+public class DatasetResolver implements PropertyResolver {
+    private final DatasetRepository repo;
+    private final Random rnd = new Random();
+
+    public DatasetResolver(DatasetRepository repo) { this.repo = repo; }
+
+    @Override
+    public Object resolve(JsonNode schemaNode, JsonNode xsource, GenerationContext ctx) {
+        String file = xsource.path("file").asText();
+        String column = xsource.path("column").asText();
+        String mode = xsource.path("mode").asText("random");
+
+        List<Map<String,String>> rows = repo.loadCsv(file, ';');
+        if (rows.isEmpty()) return null;
+
+        if ("roundrobin".equalsIgnoreCase(mode)) {
+            int idx = ctx.nextIndexFor(file);
+            return rows.get(Math.floorMod(idx, rows.size())).get(column);
+        } else { // random
+            return rows.get(rnd.nextInt(rows.size())).get(column);
+        }
+    }
+}
+
+
+package com.acme.flowsim.resolver;
+
+import com.acme.flowsim.schema.GenerationContext;
+import com.acme.flowsim.schema.PropertyResolver;
+import com.fasterxml.jackson.databind.JsonNode;
+import net.datafaker.Faker;
+
+import java.time.Instant;
+import java.util.Locale;
+import java.util.UUID;
+
+/**
+ * Résolveur polyvalent simple (uuid, now, faker providers, range, constant, probability).
+ * x-source sample:
+ *  { "strategy":"faker", "provider":"name.firstName" }
+ *  { "strategy":"uuid" }
+ *  { "strategy":"now" }
+ *  { "strategy":"constant", "value":"X" }
+ *  { "strategy":"range", "min":1, "max":10 }
+ *  { "strategy":"probability", "p":0.1 }
+ */
+public class FakerResolver implements PropertyResolver {
+    private final Faker faker = new Faker(new Locale("fr"));
+
+    @Override
+    public Object resolve(JsonNode schemaNode, JsonNode xsource, GenerationContext ctx) {
+        if (xsource == null) return null;
+        String strategy = xsource.path("strategy").asText();
+        switch (strategy) {
+            case "uuid": return UUID.randomUUID().toString();
+            case "now": return Instant.now().toString();
+            case "constant": return xsource.path("value").asText(null);
+            case "range": {
+                int min = xsource.path("min").asInt(0);
+                int max = xsource.path("max").asInt(min);
+                return min + (int)(Math.random() * ((max - min) + 1));
+            }
+            case "probability": {
+                double p = xsource.path("p").asDouble(0.5);
+                return Math.random() < p;
+            }
+            case "faker": {
+                String provider = xsource.path("provider").asText();
+                if (provider == null || provider.isBlank()) return faker.lorem().word();
+                // simple provider mapping: "name.firstName", "commerce.price"
+                if (provider.equals("name.firstName")) return faker.name().firstName();
+                if (provider.equals("name.lastName")) return faker.name().lastName();
+                if (provider.equals("commerce.price")) return Double.parseDouble(faker.commerce().price(10, 500));
+                // fallback
+                return faker.lorem().word();
+            }
+            default: return null;
+        }
+    }
+}
+
+
+
+package com.acme.flowsim.resolver;
+
+import com.acme.flowsim.schema.GenerationContext;
+import com.acme.flowsim.schema.PropertyResolver;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.apache.commons.jexl3.*;
+
+/**
+ * x-source { "strategy":"expression", "expr":"sum(items[*].qty * items[*].unitPrice)" }
+ * - Utilise JEXL. on expose ctx.variables() au moteur.
+ */
+public class ExpressionResolver implements PropertyResolver {
+    private final JexlEngine jexl = new JexlBuilder().create();
+
+    @Override
+    public Object resolve(JsonNode schemaNode, JsonNode xsource, GenerationContext ctx) {
+        if (xsource == null || !xsource.has("expr")) return null;
+        String expr = xsource.get("expr").asText();
+        try {
+            JexlContext jc = new MapContext();
+            ctx.variables().forEach(jc::set);
+            JexlExpression e = jexl.createExpression(expr);
+            Object res = e.evaluate(jc);
+            return res;
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed to evaluate expression: " + expr, ex);
+        }
+    }
+}
+
+
+package com.acme.flowsim.schema;
+
+import com.acme.flowsim.generator.FlowGeneratorService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.*;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import com.networknt.schema.ValidationMessage;
+import org.springframework.stereotype.Service;
+
+import java.util.*;
+
+/**
+ * Générateur basé sur JSON Schema + x-source metadata.
+ * - Lit le schema (SchemaLoader)
+ * - Génère un ObjectNode en résolvant les propriétés (Dataset/Faker)
+ * - Évalue les expressions après génération des propriétés dépendantes
+ * - Valide l'instance via networknt validator (optionnel)
+ */
+@Service
+public class SchemaBasedGenerator {
+    private final SchemaLoader loader;
+    private final ResolverFactory resolvers;
+    private final ObjectMapper om;
+    private final FlowGeneratorService flowGenerator; // si besoin by-schema
+    private final JsonSchemaFactory jsonSchemaFactory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+
+    public SchemaBasedGenerator(SchemaLoader loader, ResolverFactory resolvers, ObjectMapper om,
+                                FlowGeneratorService flowGenerator) {
+        this.loader = loader; this.resolvers = resolvers; this.om = om; this.flowGenerator = flowGenerator;
+    }
+
+    public Map<String,Object> generate(String schemaName, Map<String,Object> overrides) {
+        JsonNode schema = loader.load(schemaName);
+        GenerationContext ctx = new GenerationContext();
+        ObjectNode instance = generateObjectNode(schema, ctx, overrides);
+        // validate
+        validate(schema, instance);
+        return om.convertValue(instance, Map.class);
+    }
+
+    private void validate(JsonNode schemaNode, JsonNode instance) {
+        try {
+            JsonSchema schema = jsonSchemaFactory.getSchema(schemaNode);
+            Set<ValidationMessage> errors = schema.validate(instance);
+            if (!errors.isEmpty()) {
+                throw new RuntimeException("Schema validation failed: " + errors);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Validation error", e);
+        }
+    }
+
+    private ObjectNode generateObjectNode(JsonNode schemaNode, GenerationContext ctx, Map<String,Object> overrides) {
+        ObjectNode result = om.createObjectNode();
+        JsonNode props = schemaNode.path("properties");
+        if (props.isMissingNode() || !props.isObject()) return result;
+
+        // 1) Pass 1: generate non-expression properties
+        Iterator<String> it = props.fieldNames();
+        List<String> expressionKeys = new ArrayList<>();
+        while (it.hasNext()) {
+            String key = it.next();
+            JsonNode propSchema = props.get(key);
+            JsonNode xsource = propSchema.path("x-source");
+            boolean isExpression = xsource.has("strategy") && "expression".equals(xsource.path("strategy").asText());
+            if (isExpression) {
+                expressionKeys.add(key);
+                continue;
+            }
+            // override?
+            if (overrides != null && overrides.containsKey(key)) {
+                result.set(key, om.valueToTree(overrides.get(key)));
+            } else {
+                JsonNode valueNode = generateBySchema(propSchema, ctx);
+                if (valueNode != null) result.set(key, valueNode);
+            }
+            // expose partial values as variables for expression evaluation
+            ctx.setVariable(key, om.convertValue(result.get(key), Object.class));
+        }
+
+        // 2) Pass 2: evaluate expression properties (they may reference variables set above)
+        for (String key : expressionKeys) {
+            JsonNode propSchema = props.get(key);
+            JsonNode xsource = propSchema.path("x-source");
+            PropertyResolver resolver = resolvers.of(xsource);
+            Object val = null;
+            if (resolver != null) {
+                val = resolver.resolve(propSchema, xsource, ctx);
+            } else {
+                val = null;
+            }
+            ctx.setVariable(key, val);
+            if (val != null) result.set(key, om.valueToTree(val));
+        }
+
+        return result;
+    }
+
+    private JsonNode generateBySchema(JsonNode propSchema, GenerationContext ctx) {
+        String type = propSchema.path("type").asText(null);
+        JsonNode xsource = propSchema.path("x-source");
+        PropertyResolver resolver = resolvers.of(xsource);
+
+        if ("object".equals(type)) {
+            return generateObjectNode(propSchema, ctx, null);
+        } else if ("array".equals(type)) {
+            int min = propSchema.path("minItems").asInt(1);
+            int max = propSchema.path("maxItems").asInt(min);
+            int count = min + (int)(Math.random() * (max - min + 1));
+            ArrayNode arr = om.createArrayNode();
+            for (int i = 0; i < count; i++) {
+                JsonNode itemSchema = propSchema.path("items");
+                JsonNode itemVal = generateBySchema(itemSchema, ctx);
+                arr.add(itemVal == null ? NullNode.instance : itemVal);
+            }
+            return arr;
+        } else {
+            // primitive
+            if (resolver != null) {
+                Object raw = resolver.resolve(propSchema, xsource, ctx);
+                return raw == null ? NullNode.instance : om.valueToTree(raw);
+            } else {
+                // fallback: infer reasonable default
+                switch (type) {
+                    case "string":
+                        String fmt = propSchema.path("format").asText("");
+                        if ("uuid".equals(fmt)) return TextNode.valueOf(UUID.randomUUID().toString());
+                        if ("date-time".equals(fmt)) return TextNode.valueOf(java.time.Instant.now().toString());
+                        return TextNode.valueOf("str");
+                    case "integer":
+                        return IntNode.valueOf(propSchema.path("minimum").asInt(0));
+                    case "number":
+                        return DoubleNode.valueOf(propSchema.path("minimum").asDouble(0.0));
+                    case "boolean":
+                        return BooleanNode.FALSE;
+                    default:
+                        return NullNode.instance;
+                }
+            }
+        }
+    }
+}
+
+
+
+package com.acme.flowsim.schema;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.Map;
+
+@SpringBootTest
+public class SchemaBasedGeneratorIT {
+
+    @Autowired
+    SchemaBasedGenerator generator;
+
+    @Test
+    void generateOrderSample() {
+        Map<String,Object> obj = generator.generate("order", Map.of());
+        System.out.println("Generated: " + obj);
+        // Assertions minimalistes (pour demo)
+        assert obj.get("orderId") != null;
+        assert obj.get("items") != null;
+        assert obj.get("total") != null;
+    }
+}
+
+
+
+
+
+
+
+
+
+
