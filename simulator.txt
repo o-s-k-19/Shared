@@ -522,5 +522,49 @@ public class DatasetRepository {
 
 
 
-
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "order",
+  "title": "Order",
+  "type": "object",
+  "required": ["orderId","user","items","total"],
+  "properties": {
+    "orderId": {
+      "type": "string",
+      "format": "uuid",
+      "x-source": { "strategy":"uuid" }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "x-source": { "strategy":"now" }
+    },
+    "user": {
+      "type": "object",
+      "properties": {
+        "id": { "type":"string", "x-source": { "strategy":"dataset", "file":"users.csv", "column":"id", "mode":"roundrobin"} },
+        "email": { "type":"string", "format":"email", "x-source": { "strategy":"dataset", "file":"users.csv", "column":"email" } },
+        "vip": { "type":"boolean", "x-source": { "strategy":"probability", "p":0.05 } }
+      }
+    },
+    "items": {
+      "type":"array",
+      "minItems":1,
+      "maxItems":3,
+      "items": {
+        "type":"object",
+        "properties": {
+          "sku": { "type":"string", "x-source": { "strategy":"dataset", "file":"products.csv", "column":"sku" } },
+          "qty": { "type":"integer", "x-source": { "strategy":"range", "min":1, "max":5 } },
+          "unitPrice": { "type":"number", "x-source": { "strategy":"dataset", "file":"products.csv", "column":"price" } }
+        },
+        "required":["sku","qty","unitPrice"]
+      }
+    },
+    "total": {
+      "type":"number",
+      "x-source": { "strategy":"expression", "expr":"items.stream().mapToDouble(i -> ((Integer)i.get(\"qty\")).doubleValue() * ((Double)i.get(\"unitPrice\"))).sum()" }
+    }
+  }
+}
 
