@@ -1,0 +1,36 @@
+{
+  "$id": "common-types.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "definitions": {
+    "UUID": {
+      "type": "string",
+      "format": "uuid",
+      "x-source": {
+        "strategy": "uuid"
+      }
+    },
+    "Money": {
+      "type": "number",
+      "minimum": 0
+    },
+    "Address": {
+      "type": "object",
+      "properties": {
+        "street": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "zip": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "street",
+        "city",
+        "zip"
+      ]
+    }
+  }
+}

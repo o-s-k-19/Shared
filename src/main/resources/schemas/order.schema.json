@@ -1,0 +1,97 @@
+{
+  "$id": "order.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "orderId": {
+      "$ref": "common-types.json#/definitions/UUID"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "x-source": {
+        "strategy": "now"
+      }
+    },
+    "user": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "x-source": {
+            "strategy": "dataset",
+            "file": "users.csv",
+            "column": "id",
+            "mode": "roundrobin"
+          }
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "x-source": {
+            "strategy": "faker",
+            "provider": "internet.email"
+          }
+        },
+        "vip": {
+          "type": "boolean",
+          "x-source": {
+            "strategy": "probability",
+            "p": 0.1
+          }
+        }
+      },
+      "required": [
+        "id",
+        "email"
+      ]
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "x-source": {
+              "strategy": "dataset",
+              "file": "products.csv",
+              "column": "sku"
+            }
+          },
+          "qty": {
+            "type": "integer",
+            "x-source": {
+              "strategy": "range",
+              "min": 1,
+              "max": 5
+            }
+          },
+          "unitPrice": {
+            "$ref": "common-types.json#/definitions/Money"
+          }
+        },
+        "required": [
+          "sku",
+          "qty",
+          "unitPrice"
+        ]
+      }
+    },
+    "total": {
+      "type": "number",
+      "x-source": {
+        "strategy": "expression",
+        "expr": "items.stream().mapToDouble(i->(i.get('qty') * i.get('unitPrice'))).sum()"
+      }
+    }
+  },
+  "required": [
+    "orderId",
+    "user",
+    "items",
+    "total"
+  ]
+}
