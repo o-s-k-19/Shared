@@ -112,4 +112,21 @@ public class EffectiveSchemaExporter {
       throw new RuntimeException("Cannot resolve physical path for schema: " + name, e);
     }
   }
+
+public Path exportToDirectory(String name, Path outDir) {
+  try {
+    var loaded = loader.load(name); // charge depuis classpath:/schemas/<name>.schema.json
+    var effective = inliner.inlineNoRefs(loaded.root(), loaded.baseUri());
+    Files.createDirectories(outDir);
+    Path out = outDir.resolve(name + ".effective.schema.json");
+    om.writerWithDefaultPrettyPrinter().writeValue(out.toFile(), effective);
+    return out;
+  } catch (Exception e) {
+    throw new RuntimeException("Export failed for schema: " + name, e);
+  }
+}
+
+
+
+
 }
