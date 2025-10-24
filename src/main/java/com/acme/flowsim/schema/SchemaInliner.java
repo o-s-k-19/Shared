@@ -378,3 +378,272 @@ public class SchemaInliner {
   }
 }
 
+
+
+
+package com.acme.flowsim.schema;
+
+import com.fasterxml.jackson.core.JsonPointer;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.*;
+import org.springframework.stereotype.Component;
+
+import java.net.URI;
+import java.util.*;
+
+/**
+ * Produit un schéma "effectif" SANS AUCUN "$ref".
+ * - Résout récursivement tous les $ref (y compris imbriqués)
+ * - Fusionne les contraintes locales adjacentes à $ref (allOf implicite)
+ * - Aplatie / fusionne les allOf
+ * - Inline récursivement dans toutes les zones porteuses de schéma :
+ *   properties, patternProperties, additionalProperties, propertyNames,
+ *   items, contains, allOf/anyOf/oneOf/not, if/then/else, dependentSchemas, $defs/definitions, etc.
+ * - Anti-cycles + mémoïsation
+ */
+@Component
+public class SchemaInliner {
+
+  private final RefResolver refResolver;
+  private final ObjectMapper om;
+
+  public SchemaInliner(RefResolver refResolver, ObjectMapper om) {
+    this.refResolver = refResolver;
+    this.om = om;
+  }
+
+  /** Point d’entrée : retourne un ObjectNode sans aucun "$ref". */
+  public ObjectNode inlineNoRefs(JsonNode root, URI baseUri) {
+    Map<String, JsonNode> memo = new HashMap<>();        // mémoïsation
+    Deque<String> stack = new ArrayDeque<>();            // anti-boucle (trace)
+    JsonNode eff = inlineRec(root, baseUri, memo, stack);
+    // Dernière passe de nettoyage par sécurité
+    return (ObjectNode) removeAllRefs(eff);
+  }
+
+  /* =================== cœur récursif =================== */
+
+  private JsonNode inlineRec(JsonNode node, URI base, Map<String, JsonNode> memo, Deque<String> stack) {
+    if (node == null) return null;
+    if (!node.isObject()) return node.deepCopy();
+
+    // Mémorisation par identité de nœud + base (grossier mais efficace pour éviter re-travail)
+    String memoKey = System.identityHashCode(node) + "@" + (base == null ? "" : base);
+    if (memo.containsKey(memoKey)) return memo.get(memoKey).deepCopy();
+
+    ObjectNode obj = ((ObjectNode) node).deepCopy();
+
+    // 1) Si $ref présent : résoudre puis fusionner les mots-clés locaux (allOf implicite), puis continuer
+    if (obj.has("$ref")) {
+      ObjectNode locals = obj.deepCopy();
+      locals.remove("$ref");
+
+      // Résolution (RefResolver gère déjà refs imbriqués et base URI)
+      JsonNode resolved = refResolver.deref(obj, base);
+      JsonNode merged = resolved;
+      if (locals.size() > 0) {
+        // allOf = [resolved, locals] puis fusion
+        ObjectNode carrier = om.createObjectNode();
+        ArrayNode allOf = om.createArrayNode().add(resolved).add(locals);
+        carrier.set("allOf", allOf);
+        merged = mergeAllOfInline(carrier, base, memo, stack);
+      }
+      JsonNode res = inlineRec(merged, base, memo, stack);
+      memo.put(memoKey, res);
+      return res.deepCopy();
+    }
+
+    // 2) allOf : inline & fusion
+    if (obj.has("allOf") && obj.get("allOf").isArray()) {
+      obj = mergeAllOfInline(obj, base, memo, stack);
+    }
+
+    // 3) Inline récursif dans toutes les positions porteuses de schéma
+
+    // object-like
+    inlineObjectKeyword(obj, "properties",        base, memo, stack);
+    inlineObjectKeyword(obj, "patternProperties", base, memo, stack);
+    inlineSchemaKeyword(obj, "additionalProperties", base, memo, stack);
+    inlineSchemaKeyword(obj, "propertyNames", base, memo, stack);
+    inlineObjectKeyword(obj, "dependentSchemas",  base, memo, stack);
+
+    // array-like
+    inlineSchemaKeyword(obj, "items",     base, memo, stack);   // objet ou tableau de schémas
+    inlineSchemaKeyword(obj, "contains",  base, memo, stack);
+
+    // combinators & conditions
+    inlineArrayOfSchemas(obj, "anyOf", base, memo, stack);
+    inlineArrayOfSchemas(obj, "oneOf", base, memo, stack);
+    inlineSchemaKeyword(obj, "not",   base, memo, stack);
+    inlineSchemaKeyword(obj, "if",    base, memo, stack);
+    inlineSchemaKeyword(obj, "then",  base, memo, stack);
+    inlineSchemaKeyword(obj, "else",  base, memo, stack);
+
+    // defs / definitions (on inline, mais tu peux ensuite choisir de les dropper si tu veux un schéma minimal)
+    inlineObjectKeyword(obj, "$defs",       base, memo, stack);
+    inlineObjectKeyword(obj, "definitions", base, memo, stack);
+
+    memo.put(memoKey, obj);
+    return obj.deepCopy();
+  }
+
+  /* =================== helpers d’inlining =================== */
+
+  /** Inline & fusionne allOf, puis continue l’inlining sur le résultat. */
+  private ObjectNode mergeAllOfInline(ObjectNode nodeWithAllOf, URI base, Map<String, JsonNode> memo, Deque<String> stack) {
+    ArrayNode all = nodeWithAllOf.has("allOf") && nodeWithAllOf.get("allOf").isArray()
+        ? (ArrayNode) nodeWithAllOf.get("allOf") : om.createArrayNode();
+
+    List<ObjectNode> parts = new ArrayList<>();
+    for (JsonNode part : all) {
+      JsonNode eff = inlineRec(part, base, memo, stack);
+      if (eff.isObject()) parts.add((ObjectNode) eff);
+    }
+
+    ObjectNode acc = om.createObjectNode();
+    for (ObjectNode p : parts) deepMergeSchema(acc, p);
+
+    // Recopier les champs locaux hors allOf (priorité locaux)
+    nodeWithAllOf.fields().forEachRemaining(e -> {
+      if (!"allOf".equals(e.getKey())) acc.set(e.getKey(), e.getValue());
+    });
+
+    // Continuer l’inlining sur le résultat fusionné
+    return (ObjectNode) inlineRec(acc, base, memo, stack);
+  }
+
+  /** Inline récursif pour un champ map<string,schema> (properties, patternProperties, $defs, …). */
+  private void inlineObjectKeyword(ObjectNode host, String key, URI base, Map<String, JsonNode> memo, Deque<String> stack) {
+    JsonNode n = host.get(key);
+    if (n != null && n.isObject()) {
+      ObjectNode out = om.createObjectNode();
+      n.fields().forEachRemaining(e -> out.set(e.getKey(), inlineRec(e.getValue(), base, memo, stack)));
+      host.set(key, out);
+    }
+  }
+
+  /** Inline récursif pour un champ qui peut être un schéma objet ou un tableau de schémas (items, contains, not, if/then/else, …). */
+  private void inlineSchemaKeyword(ObjectNode host, String key, URI base, Map<String, JsonNode> memo, Deque<String> stack) {
+    JsonNode n = host.get(key);
+    if (n == null) return;
+    if (n.isObject()) {
+      host.set(key, inlineRec(n, base, memo, stack));
+    } else if (n.isArray()) {
+      ArrayNode arr = om.createArrayNode();
+      n.forEach(el -> arr.add(inlineRec(el, base, memo, stack)));
+      host.set(key, arr);
+    }
+  }
+
+  /** Inline pour un tableau de schémas (anyOf/oneOf). */
+  private void inlineArrayOfSchemas(ObjectNode host, String key, URI base, Map<String, JsonNode> memo, Deque<String> stack) {
+    JsonNode n = host.get(key);
+    if (n != null && n.isArray()) {
+      ArrayNode arr = om.createArrayNode();
+      n.forEach(el -> arr.add(inlineRec(el, base, memo, stack)));
+      host.set(key, arr);
+    }
+  }
+
+  /* =================== fusion de schémas =================== */
+
+  /**
+   * Fusion "schema-wise" :
+   * - object: merge properties (profonde), union required, propagate additionalProperties/patternProperties
+   * - array: items/contains + contraintes
+   * - scalaires: constraints (min/max/format/enum/…); la source écrase la cible pour les scalaires
+   * - type: si absent sur cible, on copie; si conflit, on garde la cible (ou adapte au besoin)
+   */
+  private void deepMergeSchema(ObjectNode target, ObjectNode src) {
+    // type
+    if (src.has("type") && !target.has("type")) target.set("type", src.get("type"));
+
+    // object-like
+    if (src.has("properties") && src.get("properties").isObject()) {
+      ObjectNode tgtProps = target.has("properties") && target.get("properties").isObject()
+          ? (ObjectNode) target.get("properties") : om.createObjectNode();
+      ObjectNode srcProps = (ObjectNode) src.get("properties");
+      srcProps.fields().forEachRemaining(e -> {
+        JsonNode t = tgtProps.get(e.getKey());
+        if (t != null && t.isObject() && e.getValue().isObject()) {
+          ObjectNode merged = om.createObjectNode();
+          deepMergeSchema(merged, (ObjectNode) t);
+          deepMergeSchema(merged, (ObjectNode) e.getValue());
+          tgtProps.set(e.getKey(), merged);
+        } else {
+          tgtProps.set(e.getKey(), e.getValue());
+        }
+      });
+      target.set("properties", tgtProps);
+    }
+    // required (union)
+    Set<String> req = new LinkedHashSet<>();
+    if (target.has("required") && target.get("required").isArray())
+      target.get("required").forEach(n -> req.add(n.asText()));
+    if (src.has("required") && src.get("required").isArray())
+      src.get("required").forEach(n -> req.add(n.asText()));
+    if (!req.isEmpty()) {
+      ArrayNode arr = om.createArrayNode();
+      req.forEach(arr::add);
+      target.set("required", arr);
+    }
+    // additionalProperties / patternProperties / propertyNames
+    copyIfPresent(src, target, "additionalProperties", "propertyNames");
+    if (src.has("patternProperties") && src.get("patternProperties").isObject()) {
+      ObjectNode tgt = target.has("patternProperties") && target.get("patternProperties").isObject()
+          ? (ObjectNode) target.get("patternProperties") : om.createObjectNode();
+      src.get("patternProperties").fields().forEachRemaining(e -> tgt.set(e.getKey(), e.getValue()));
+      target.set("patternProperties", tgt);
+    }
+    // dependentSchemas
+    if (src.has("dependentSchemas") && src.get("dependentSchemas").isObject()) {
+      ObjectNode tgt = target.has("dependentSchemas") && target.get("dependentSchemas").isObject()
+          ? (ObjectNode) target.get("dependentSchemas") : om.createObjectNode();
+      src.get("dependentSchemas").fields().forEachRemaining(e -> tgt.set(e.getKey(), e.getValue()));
+      target.set("dependentSchemas", tgt);
+    }
+
+    // array-like
+    if (src.has("items"))     target.set("items", src.get("items"));
+    if (src.has("contains"))  target.set("contains", src.get("contains"));
+    copyIfPresent(src, target, "minItems","maxItems","uniqueItems");
+
+    // combinators / conditionals (recopiés tels quels, déjà inlinés ailleurs)
+    copyIfPresent(src, target, "anyOf","oneOf","not","if","then","else");
+
+    // scalaires & contraintes communes
+    copyIfPresent(src, target,
+        "format","minimum","maximum","exclusiveMinimum","exclusiveMaximum",
+        "multipleOf","minLength","maxLength","pattern","enum","const","default");
+
+    // defs : recopier si présents (déjà inlinés mais on les conserve pour information ; sinon on peut les retirer ensuite)
+    if (src.has("$defs"))       target.set("$defs", src.get("$defs"));
+    if (src.has("definitions")) target.set("definitions", src.get("definitions"));
+  }
+
+  private void copyIfPresent(ObjectNode src, ObjectNode tgt, String... keys) {
+    for (String k : keys) if (src.has(k)) tgt.set(k, src.get(k));
+  }
+
+  /* =================== nettoyage final =================== */
+
+  /** Supprime tout "$ref" résiduel (sécurité) sur l’arbre. */
+  private JsonNode removeAllRefs(JsonNode n) {
+    if (n == null) return null;
+    if (n.isObject()) {
+      ObjectNode obj = ((ObjectNode) n).deepCopy();
+      obj.remove("$ref");
+      obj.fieldNames().forEachRemaining(k -> obj.set(k, removeAllRefs(obj.get(k))));
+      return obj;
+    } else if (n.isArray()) {
+      ArrayNode arr = om.createArrayNode();
+      n.forEach(el -> arr.add(removeAllRefs(el)));
+      return arr;
+    } else {
+      return n.deepCopy();
+    }
+  }
+}
+
+
