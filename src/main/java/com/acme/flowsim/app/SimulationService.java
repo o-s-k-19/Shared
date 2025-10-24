@@ -105,3 +105,59 @@ public class SchemaExportCli {
     return def;
   }
 }
+
+
+
+<profiles>
+  <profile>
+    <id>generate-effective-schemas</id>
+    <build>
+      <plugins>
+        <!-- Compiler pour que le CLI soit exécutable pendant le build -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.11.0</version>
+          <executions>
+            <execution>
+              <id>compile-before-export</id>
+              <phase>process-classes</phase>
+              <goals><goal>compile</goal></goals>
+            </execution>
+          </executions>
+        </plugin>
+
+        <!-- Exécuter le CLI pendant generate-resources -->
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>exec-maven-plugin</artifactId>
+          <version>3.3.0</version>
+          <executions>
+            <execution>
+              <id>export-effective-schemas</id>
+              <phase>generate-resources</phase>
+              <goals><goal>java</goal></goals>
+              <configuration>
+                <mainClass>com.acme.flowsim.tools.SchemaExportCli</mainClass>
+                <classpathScope>compile</classpathScope>
+                <arguments>
+                  <argument>--sourceDir=src/main/resources/schemas</argument>
+                  <argument>--outputDir=src/main/resources/effective-schemas</argument>
+                </arguments>
+                <systemProperties>
+                  <!-- On s'assure de démarrer sans web -->
+                  <systemProperty>
+                    <key>spring.main.web-application-type</key>
+                    <value>none</value>
+                  </systemProperty>
+                </systemProperties>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </build>
+  </profile>
+</profiles>
+
+
