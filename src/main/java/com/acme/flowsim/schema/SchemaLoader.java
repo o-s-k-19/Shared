@@ -1,4 +1,4 @@
-package com.acme.flowsim.schema;
+package com.acme.flowsim.schema; 
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
