@@ -1,3 +1,15 @@
+<dependency>
+  <groupId>jakarta.validation</groupId>
+  <artifactId>jakarta.validation-api</artifactId>
+  <version>3.1.0</version>
+</dependency>
+<dependency>
+  <groupId>org.hibernate.validator</groupId>
+  <artifactId>hibernate-validator</artifactId>
+  <version>9.0.0.Final</version>
+</dependency>
+
+
 <build>
   <plugins>
 
@@ -39,7 +51,10 @@
 
             <!-- Strict mode vis-à-vis d’additionalProperties -->
             <includeAdditionalProperties>false</includeAdditionalProperties>
-          </configuration>
+          <includeJsr303Annotations>true</includeJsr303Annotations>
+<useJakartaValidation>true</useJakartaValidation>
+
+</configuration>
         </execution>
       </executions>
     </plugin>
