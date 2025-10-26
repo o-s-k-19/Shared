@@ -1,0 +1,48 @@
+<build>
+  <plugins>
+
+    <!-- (déjà en place chez toi) : exécution qui aplatit les schémas -->
+    <!-- … -->
+
+    <!-- Génération des POJOs depuis les schémas aplatis -->
+    <plugin>
+      <groupId>org.jsonschema2pojo</groupId>
+      <artifactId>jsonschema2pojo-maven-plugin</artifactId>
+      <version>1.2.1</version> <!-- ou plus récent -->
+      <executions>
+        <execution>
+          <goals><goal>generate</goal></goals>
+          <configuration>
+            <!-- Répertoire contenant les schémas APLATIS -->
+            <sourceDirectory>${project.build.directory}/generated-schemas/schemas</sourceDirectory>
+            <sourceType>jsonschema</sourceType>
+
+            <!-- Où placer le code généré -->
+            <outputDirectory>${project.build.directory}/generated-sources/js2p</outputDirectory>
+            <addCompileSourceRoot>true</addCompileSourceRoot>
+
+            <!-- Packaging -->
+            <targetPackage>com.acme.model</targetPackage>
+
+            <!-- Annotations & qualité -->
+            <annotationStyle>jackson2</annotationStyle>
+            <includeJsr303Annotations>true</includeJsr303Annotations>
+            <includeHashcodeAndEquals>true</includeHashcodeAndEquals>
+            <includeToString>true</includeToString>
+            <generateBuilders>true</generateBuilders>
+
+            <!-- Types forts & cohérents -->
+            <useBigDecimals>true</useBigDecimals>
+            <dateTimeType>java.time.OffsetDateTime</dateTimeType>
+            <dateType>java.time.LocalDate</dateType>
+            <timeType>java.time.LocalTime</timeType>
+
+            <!-- Strict mode vis-à-vis d’additionalProperties -->
+            <includeAdditionalProperties>false</includeAdditionalProperties>
+          </configuration>
+        </execution>
+      </executions>
+    </plugin>
+
+  </plugins>
+</build>
